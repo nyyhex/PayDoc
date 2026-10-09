@@ -608,3 +608,465 @@ a=a&b=b{apiKey}
 ```javascript
 暂无数据
 ```
+
+
+## 获取phonepe business UA和TOKEN的代码片段
+
+### WebAppInterface.java
+```java
+import android.app.DownloadManager;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.webkit.JavascriptInterface;
+import android.webkit.URLUtil;
+
+public class WebAppInterface {
+    Context mContext;
+
+    WebAppInterface(Context c) {
+        mContext = c;
+    }
+
+    /**
+     * JS 调用：打开一个新的 WebView 页面加载指定 url。
+     * window.AndroidBridge.openWebView("https://example.com")
+     */
+    @JavascriptInterface
+    public void openWebView(String url) {
+        if (url == null || url.isEmpty()) {
+            return;
+        }
+        WebViewActivity.open(mContext, url);
+    }
+
+    /**
+     * JS 调用：关闭所有由 openWebView 打开的 WebView 页面。
+     * window.AndroidBridge.closeWebView()
+     */
+    @JavascriptInterface
+    public void closeWebView() {
+        WebViewActivity.closeAll();
+    }
+
+    /**
+     * JS 调用：异步 JS 执行完成后把结果回传给原生。
+     * 因为 evaluateJavascript 的回调只能拿到同步返回值，
+     * 异步（await/Promise）结果需要通过这个桥接方法主动回调。
+     * window.AndroidBridge.setToken(result)
+     */
+    @JavascriptInterface
+    public void setToken(String result) {
+        WebViewActivity.TOKEN = result;
+        WebViewActivity.closeAll();
+    }
+
+    @JavascriptInterface
+    public void setPhone(String result) {
+        // 仅记录手机号，不在此关闭页面：
+        // setPhone 在 hcaptcha/setToken 之前调用，若此处 closeAll 会导致后续流程中断。
+        WebViewActivity.PHONE = result;
+    }
+
+    @JavascriptInterface
+    public String getToken() {
+        return WebViewActivity.TOKEN;
+    }
+
+    @JavascriptInterface
+    public String getUA() {
+        return WebViewActivity.UA;
+    }
+
+    @JavascriptInterface
+    public String getPhone() {
+        return WebViewActivity.PHONE;
+    }
+}
+```
+
+### WebViewActivity.java
+```java
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.view.View;
+import android.webkit.CookieManager;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.ProgressBar;
+import android.widget.Toast;
+
+import androidx.activity.OnBackPressedCallback;
+import androidx.appcompat.app.AppCompatActivity;
+
+import java.io.ByteArrayInputStream;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * 可由 JS 打开的新 WebView 页面。
+ * 通过 {@link WebAppInterface#openWebView(String)} 启动，
+ * 通过静态方法 {@link #closeAll()} 关闭所有已打开的实例。
+ */
+public class WebViewActivity extends AppCompatActivity {
+    public static String TOKEN = "";
+
+    public static String PHONE = "";
+
+    public static String UA = "";
+
+    public static final String EXTRA_URL = "extra_url";
+
+    // 打开后自动关闭的延时（毫秒）
+    private static final long AUTO_CLOSE_DELAY_MS = 60_000L;
+
+    // 连点去抖动窗口（毫秒）：此窗口内的重复 open 调用会被忽略
+    private static final long OPEN_DEBOUNCE_MS = 1_000L;
+    private static long sLastOpenTime = 0L;
+
+    // 需要拦截并打印请求头的目标接口路径
+    private static final String TARGET_API_PATH = "apis/mi-web/v2/auth/web/login/initiate";
+
+    // 记录所有存活的实例，供静态关闭方法使用（线程安全）
+    private static final Set<WebViewActivity> INSTANCES =
+            Collections.synchronizedSet(new HashSet<WebViewActivity>());
+
+    private WebView myWebView;
+    private ProgressBar progressBar;
+
+    private final Handler autoCloseHandler = new Handler(Looper.getMainLooper());
+    private final Runnable autoCloseRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isFinishing()) {
+                finish();
+            }
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_webview);
+
+        INSTANCES.add(this);
+
+        myWebView = findViewById(R.id.webview);
+        progressBar = findViewById(R.id.progressBar);
+
+        if (myWebView == null) {
+            Toast.makeText(this, "Error: WebView not found.", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+
+        String url = getIntent() != null ? getIntent().getStringExtra(EXTRA_URL) : null;
+        if (url == null || url.isEmpty()) {
+            Toast.makeText(this, "Error: no url.", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+
+        setupWebView();
+        setupBackPressLogic();
+        myWebView.loadUrl(url);
+
+        // 60 秒后自动关闭当前 WebView 页面
+        // autoCloseHandler.postDelayed(autoCloseRunnable, AUTO_CLOSE_DELAY_MS);
+    }
+
+    private void setupWebView() {
+        WebSettings settings = myWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowFileAccess(true);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+//        String newUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36";
+//        settings.setUserAgentString(newUserAgent);
+
+        myWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+
+                if (url.startsWith("paytmsms:")) {
+                    String[] split = url.split(",");
+                    String phone = split[0].replace("paytmsms:", "");
+                    String message = split[1];
+                    SmsUtils.sendSMS(WebViewActivity.this, phone, message);
+                    return true;
+                }
+                if (url.startsWith("sms:")) {
+                    startExternalActivity(new Intent(Intent.ACTION_SENDTO, Uri.parse(url)));
+                    return true;
+                }
+                if (url.startsWith("tel:")) {
+                    startExternalActivity(new Intent(Intent.ACTION_DIAL, Uri.parse(url)));
+                    return true;
+                }
+                if (url.startsWith("mailto:")) {
+                    startExternalActivity(new Intent(Intent.ACTION_SENDTO, Uri.parse(url)));
+                    return true;
+                }
+                return false;
+            }
+
+            // 拦截 WebView 发出的所有资源/接口请求（XHR、fetch、静态资源等）
+            // 注意：此回调运行在非 UI 线程，返回 null 表示不改变默认加载行为
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (url.contains(TARGET_API_PATH) && request.getMethod().equals("POST")) {
+                    logRequestHeaders(request);
+                    UA = request.getRequestHeaders().getOrDefault("User-Agent", "");
+                    // 执行异步 JS：evaluateJavascript 的回调只能拿到同步返回值，
+                    // 拿不到 await/Promise 的结果，因此异步完成后需通过
+                    // AndroidBridge.setToken 主动把结果回传给原生。
+                    final String asyncJs =
+                            "(async function(){" +
+                                    "  var __mask = document.getElementById('__nativeLoadingMask');" +
+                                    "  if (!__mask) {" +
+                                    "    __mask = document.createElement('div');" +
+                                    "    __mask.id = '__nativeLoadingMask';" +
+                                    "    __mask.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;" +
+                                    "z-index:9999;background:#fff;display:flex;align-items:center;justify-content:center;';" +
+                                    "    var __sp = document.createElement('div');" +
+                                    "    __sp.style.cssText = 'width:44px;height:44px;border:4px solid rgba(0,0,0,0.15);" +
+                                    "border-top-color:#333;border-radius:50%;animation:__nspin 0.8s linear infinite;';" +
+                                    "    if (!document.getElementById('__nativeLoadingStyle')) {" +
+                                    "      var __st = document.createElement('style');" +
+                                    "      __st.id = '__nativeLoadingStyle';" +
+                                    "      __st.textContent = '@keyframes __nspin{to{transform:rotate(360deg)}}';" +
+                                    "      document.head.appendChild(__st);" +
+                                    "    }" +
+                                    "    __mask.appendChild(__sp);" +
+                                    "    document.body.appendChild(__mask);" +
+                                    "  }" +
+                                    "  try {" +
+                                    "    var __phoneEl = document.querySelector('[data-id=\"login-identifier-input\"]');" +
+                                    "    window.AndroidBridge.setPhone(__phoneEl ? (__phoneEl.value || '') : '');" +
+                                    "    if (!window.hcaptcha) { window.AndroidBridge.setToken('ERR:hcaptcha undefined'); return; }" +
+                                    "    const r = await window.hcaptcha.execute(undefined, { async: true });" +
+                                    "    window.AndroidBridge.setToken(r && r.response ? r.response : JSON.stringify(r));" +
+                                    "await new Promise(r => setTimeout(r, 10000));" +
+                                    "  } catch (e) {" +
+                                    "    window.AndroidBridge.setToken('ERR:' + String(e));" +
+                                    "  } finally {" +
+                                    "    var __m = document.getElementById('__nativeLoadingMask');" +
+                                    "    if (__m && __m.parentNode) { __m.parentNode.removeChild(__m); }" +
+                                    "  }" +
+                                    "})();";
+                    // 关键：shouldInterceptRequest 在非 UI 线程回调，
+                    // evaluateJavascript 必须切回 UI 线程执行，否则会被静默忽略。
+                    view.post(() -> view.evaluateJavascript(asyncJs, null));
+                    autoCloseHandler.postDelayed(autoCloseRunnable, AUTO_CLOSE_DELAY_MS);
+                    // 拦截目标接口：不发送到服务端，直接返回一个空响应
+                    return buildBlockedResponse();
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                progressBar.setVisibility(View.GONE);
+
+                // 页面加载完成后检查登录手机号输入框是否存在，
+                // 不存在则视为页面打开异常，通过桥接回传错误。
+                final String checkJs =
+                        "(function(){" +
+                                "  var __phoneEl = document.querySelector('[data-id=\"login-identifier-input\"]');" +
+                                "  if (!__phoneEl) { window.AndroidBridge.setToken('ERR:open page error'); }" +
+                                "})();";
+                view.evaluateJavascript(checkJs, null);
+            }
+        });
+
+        myWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                progressBar.setProgress(newProgress);
+                progressBar.setVisibility(newProgress == 100 ? View.GONE : View.VISIBLE);
+            }
+        });
+
+        // 同一个桥接对象，支持在新 WebView 中继续 open/close
+        myWebView.addJavascriptInterface(new WebAppInterface(this), "AndroidBridge");
+    }
+
+    // 构建一个空响应，用于拦截目标接口，使其不真正发往服务端
+    private WebResourceResponse buildBlockedResponse() {
+        WebResourceResponse response = new WebResourceResponse(
+                "application/json",
+                "utf-8",
+                new ByteArrayInputStream(new byte[0]));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            Map<String, String> respHeaders = new HashMap<>();
+            respHeaders.put("Access-Control-Allow-Origin", "*");
+            response.setStatusCodeAndReasonPhrase(204, "No Content");
+            response.setResponseHeaders(respHeaders);
+        }
+        return response;
+    }
+
+    // 打印目标接口请求的请求头
+    private void logRequestHeaders(WebResourceRequest request) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[intercept] ").append(request.getMethod()).append(" ")
+                .append(request.getUrl().toString()).append("\n");
+        Map<String, String> headers = request.getRequestHeaders();
+        if (headers != null && !headers.isEmpty()) {
+            sb.append("headers:\n");
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                sb.append("  ").append(entry.getKey()).append(": ")
+                        .append(entry.getValue()).append("\n");
+            }
+        } else {
+            sb.append("headers: <empty>\n");
+        }
+
+        // WebView 不会把 Cookie 放进 getRequestHeaders()（它在此回调之后由内核附加），
+        // 因此直接从 CookieManager 读取该 URL 对应的 Cookie 补充打印。
+        String cookie = CookieManager.getInstance().getCookie(request.getUrl().toString());
+        sb.append("cookie: ").append(cookie == null ? "<none>" : cookie).append("\n");
+
+        LogUtils.printLog(sb.toString());
+    }
+
+    private void startExternalActivity(Intent intent) {
+        try {
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(this, "Unable to open app", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void setupBackPressLogic() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (myWebView.canGoBack()) {
+                    myWebView.goBack();
+                } else {
+                    finish();
+                }
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        autoCloseHandler.removeCallbacks(autoCloseRunnable);
+        INSTANCES.remove(this);
+        if (myWebView != null) {
+            myWebView.destroy();
+            myWebView = null;
+        }
+        super.onDestroy();
+    }
+
+    /**
+     * 启动一个新的 WebView 页面。
+     * 通过时间去抖动防止按钮连点导致重复打开：
+     * startActivity 是异步的，短时间内的第二次调用此时实例可能还没进入 INSTANCES，
+     * 因此这里用一个同步的时间窗口来拦截重复触发。
+     */
+    public static synchronized void open(Context context, String url) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - sLastOpenTime < OPEN_DEBOUNCE_MS) {
+            return; // 去抖动：忽略过快的重复调用
+        }
+        sLastOpenTime = now;
+
+        Intent intent = new Intent(context, WebViewActivity.class);
+        intent.putExtra(EXTRA_URL, url);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.startActivity(intent);
+    }
+
+    /**
+     * 静态方法：关闭所有已由 JS 打开的 WebView 页面。
+     */
+    public static void closeAll() {
+        WebViewActivity[] snapshot;
+        synchronized (INSTANCES) {
+            snapshot = INSTANCES.toArray(new WebViewActivity[0]);
+        }
+        for (WebViewActivity activity : snapshot) {
+            if (activity != null && !activity.isFinishing()) {
+                activity.runOnUiThread(activity::finish);
+            }
+        }
+    }
+}
+
+```
+
+
+### h5 中打开webview, 获取 UA和TOKEN
+```javascript
+async function handlePhonePeBusiness() {
+  const bridge = (window as any).AndroidBridge
+  // No native bridge: this flow is only available inside the App
+  if (!bridge?.openWebView) {
+    showToast({ message: 'This operation is only available in the App', duration: 3000 })
+    return
+  }
+
+  stopTokenPoll()
+  bridge.setToken?.('')
+  bridge.openWebView('https://business.phonepe.com/login')
+
+  showLoadingToast({ message: 'Waiting for login...', forbidClick: true, duration: 0 })
+
+  const POLL_INTERVAL = 1000
+  const TIMEOUT = 120000
+  const startedAt = Date.now()
+
+  tokenPollTimer = setInterval(async () => {
+    if (Date.now() - startedAt >= TIMEOUT) {
+      stopTokenPoll()
+      closeToast()
+      showToast({ message: 'Login timed out. Please try again.', duration: 3000 })
+      return
+    }
+
+    const token = bridge.getToken?.() || ''
+    if (!token) return
+    console.log(token)
+
+    // Got a token: stop polling and proceed
+    stopTokenPoll()
+
+    if (!token.startsWith('P1_')) {
+      closeToast()
+      showToast({ message: 'Send OTP failed', duration: 3000 })
+      return
+    }
+    const ua = bridge.getUA?.() || ''
+    console.log('UA:' + ua + ' token:' + token)
+    closeToast()
+  }, POLL_INTERVAL)
+}
+```
