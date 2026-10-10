@@ -432,7 +432,8 @@ a=a&b=b{apiKey}
 				"txnId": "625803276137",
 				"utr": "625803276137",
 				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.675Z"
+				"createTime": "2026-10-09T09:33:46.675Z",
+                "sourceFrom": "balance" // balance余额/bank银行卡/others其他
 			},
 			{
 				"_id": "6ac8b4fa9f9c6d78ccce8bf8",
