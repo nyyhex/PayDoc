@@ -265,6 +265,63 @@ a=a&b=b{apiKey}
 }
 ```
 
+* 网络错误
+```javascript
+{
+	"code": 400,
+	"message": "network error"
+}
+```
+* 账号不能使用otp登录（亚马逊账号设置了2步验证、密码）
+```javascript
+{
+	"code": 400,
+	"message": "account not use otp login"
+}
+```
+* 账号未注册
+```javascript
+{
+	"code": 400,
+	"message": "account not registered"
+}
+```
+* 发送太频繁
+```javascript
+{
+	"code": 400,
+	"message": "send otp too many"
+}
+```
+* 未知错误
+```javascript
+{
+	"code": 400,
+	"message": "unknow error"
+}
+```
+* 账号已绑定（需要离线再otp绑定）
+```javascript
+{
+	"code": 400,
+	"message": "account is binding user ID."
+}
+```
+* paytmbusiness密码不正确
+```javascript
+{
+	"code": 400,
+	"message": "Invalid Paytm Business account or password."
+}
+```
+* 账号被封
+```javascript
+{
+	"code": 400,
+	"message": "account ban"
+}
+```
+
 * 失败(404)
 
 ```javascript
@@ -290,6 +347,7 @@ a=a&b=b{apiKey}
 {
     "otp": "448057",
     "requestId": "6ac8b76b0f993f03fbb5a099"
+    "isEmail": false // 只有amazonpay 才有邮箱验证
 }
 ```
 
@@ -302,6 +360,48 @@ a=a&b=b{apiKey}
   "code": 1,
   "message": "success",
   "data": true
+}
+```
+* otp错误
+```javascript
+{
+	"code": 400,
+	"message": "incorrect otp"
+}
+```
+* requestId错误
+```javascript
+{
+	"code": 400,
+	"message": "requestId error"
+}
+```
+* 账号被封
+```javascript
+{
+	"code": 400,
+	"message": "account ban"
+}
+```
+* 网络错误
+```javascript
+{
+	"code": 400,
+	"message": "network error"
+}
+```
+* 未知错误
+```javascript
+{
+	"code": 400,
+	"message": "unknow error"
+}
+```
+* 需要邮箱验证(amazonpay)
+```javascript
+{
+	"code": 400,
+	"message": "need_email_verify:xxx@gmail.com"
 }
 ```
 
