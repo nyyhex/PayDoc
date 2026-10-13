@@ -527,7 +527,7 @@ a=a&b=b{apiKey}
                 "payee": "", // 收款人
 				"amount": "1.00",
 				"currency": "INR",
-				"status": "SUCCESS", // 交易状态 SUCCESS 成功 / FAILED 失败
+				"status": "SUCCESS", // 交易状态 SUCCESS 成功 / FAILED 失败 / PENDING 进行中
 				"txnDate": 1789454271659, // 交易时间
 				"txnId": "625803276137",
 				"utr": "625803276137",
