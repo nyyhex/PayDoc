@@ -664,6 +664,29 @@ a=a&b=b{apiKey}
 }
 ```
 
+* 请求太快，10秒
+```javascript
+{
+	"code": 400,
+	"message": "request too quick"
+}
+```
+* 账号不存在
+```javascript
+{
+	"code": 400,
+	"message": "account not found"
+}
+```
+* 拉取账单失败
+```javascript
+{
+	"code": 400,
+	"message": "sync bill failed"
+}
+```
+
+
 * 失败(404)
 
 ```javascript
