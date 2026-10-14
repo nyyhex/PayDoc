@@ -246,6 +246,7 @@ a=a&b=b{apiKey}
     "proxyPort":10000, // 代理端口
     "proxyUsername":"", // 代理用户名
     "proxyPassword":"" // 代理密码
+    "sendWhatApps": false, // amazonpay 有效 false sms和whatsapp都发送/ true 只发送whatsapp 
 }
 ```
 
