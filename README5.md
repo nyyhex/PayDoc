@@ -445,15 +445,18 @@ a=a&b=b{apiKey}
 	"data": [
 		{
 			"pa": "Q549243885@ybl",
-			"pn": ""
+			"pn": "",
+            "isAdmin": true // paytmbusiness/phonepebusiness的账号 是否是主账号
 		},
 		{
 			"pa": "Q309562627@ybl",
-			"pn": ""
+			"pn": "",
+            "isAdmin": true // paytmbusiness/phonepebusiness的账号 是否是主账号
 		},
 		{
 			"pa": "Q030582922@ybl",
-			"pn": ""
+			"pn": "",
+            "isAdmin": true // paytmbusiness/phonepebusiness的账号 是否是主账号
 		}
 	]
 }
