@@ -321,6 +321,18 @@ a=a&b=b{apiKey}
 	"message": "account ban"
 }
 ```
+* 未进行UPI验证
+```javascript
+{
+	"code": 400,
+	"message": "account not bind upi"
+}
+亚马逊UPI验证步骤：
+1. Device binding: The app sends an SMS from your phone to confirm your SIM matches your bank-linked number.
+2. Bank link: Your accounts are fetched via that number.
+3. UPI PIN: Verified with debit card last 6 digits, expiry, and OTP.
+4. Payments: Receiver's VPA is validated via NPCI, and each payment needs your UPI PIN.
+```
 
 * 失败(404)
 
