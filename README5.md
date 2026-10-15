@@ -483,7 +483,12 @@ a=a&b=b{apiKey}
 	"code": 400,
 	"message": "account not found" 
 }
-网络请求
+网络错误
+{
+	"code": 400,
+	"message": "network error"
+}
+请求未正常返回错误
 {
 	"code": 400,
 	"message": "request error"
@@ -701,7 +706,13 @@ a=a&b=b{apiKey}
 	"message": "sync bill failed"
 }
 ```
-
+* 账号未授权
+```javascript
+{
+	"code": 400,
+	"message": "account unauthorized"
+}
+```
 
 * 失败(404)
 
