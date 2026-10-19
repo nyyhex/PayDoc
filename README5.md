@@ -763,77 +763,6 @@ a=a&b=b{apiKey}
 # APP绑定
 在APP上完成登录、转账操作后，提交手机号绑定
 
-## 获取银行卡列表
-**接口URL**
-
-> /api/open/saasAppBankList
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "7876164498",
-    "typeCode": "phonepe",
-    "proxyIp": "global.rotgb.711proxy.com",
-    "proxyPort": 10000,
-    "proxyUsername": "USER977875-zone-custom-region-IN-session-5e9b1d3f7a0c4e8b2f6d1a5e9c3b7f0d-sessTime-30-sessAuto-1",
-    "proxyPassword": "9a3e89"
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": [
-		{
-			"accountId": "A2512041512244278570432",
-			"bankName": "HDFC Bank",
-			"accountNo": "XXXXXXXXXX9951",
-			"vpas": [
-				"cocaxcola@ybl",
-				"cocaxcola@axl",
-				"cocaxcola@ibl",
-				"7876164498-4@ybl",
-				"7876164498-4@ibl",
-				"7876164498-4@axl"
-			]
-		},
-		{
-			"accountId": "A2508282047090029973791",
-			"bankName": "State Bank Of India ",
-			"accountNo": "XXXXXX9046",
-			"vpas": [
-				"cocaxpepsi@ibl",
-				"cocaxpepsi@ybl",
-				"cocaxpepsi@axl",
-				"7876164498-3@ybl",
-				"7876164498-3@axl",
-				"7876164498-3@ibl"
-			]
-		}
-	]
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
 ## 绑定钱包
 **接口URL**
 
@@ -853,9 +782,6 @@ a=a&b=b{apiKey}
 {
     "phone": "7876164498",
     "typeCode": "phonepe",
-    "bankAccountId": "A2512041512244278570432",
-    "pin": "123456",
-    "vpa": "cocaxcola@ybl",
     "proxyIp": "global.rotgb.711proxy.com",
     "proxyPort": 10000,
     "proxyUsername": "USER977875-zone-custom-region-IN-session-5e9b1d3f7a0c4e8b2f6d1a5e9c3b7f0d-sessTime-30-sessAuto-1",
@@ -872,97 +798,6 @@ a=a&b=b{apiKey}
 	"code": 1,
 	"message": "success",
 	"data": true
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-## 获取余额
-**接口URL**
-
-> /api/open/saasGetBal
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "7876164498",
-    "typeCode": "phonepe"
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": {
-		"amount": 705.56,
-		"lastUpdateTimestamp": 1791876895220
-	}
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-
-## 支付
-**接口URL**
-
-> /api/open/saasPay
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "787616449",
-    "typeCode": "phonepe",
-    "payType": "vpa", // vpa/bank
-    "vpa": "8627955319-2@ybl", // vpa时必传
-    "bankAccount": "03580110136911", // bank时必传
-    "ifsc": "UCBA0000358", // bank必传
-    "amount": "1" // 金额
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": {
-		"txnId": ""
-	}
 }
 ```
 
