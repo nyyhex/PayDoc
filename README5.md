@@ -807,6 +807,51 @@ a=a&b=b{apiKey}
 暂无数据
 ```
 
+# 提交交易数据
+
+## 提交交易数据
+**接口URL**
+
+> /api/open/submitTrade
+
+**请求方式**
+
+> POST
+
+**Content-Type**
+
+> json
+
+**请求Body参数**
+
+```javascript
+{
+    "txnId": "787616449sdsd8", // txnId
+    "utr": "1111111111", // utr
+    "txnTime": 1792565321514, // 交易时间
+    "amount": "100.00", // 交易金额
+    "typeCode": "mobikwikotp", // 账号类型
+    "phone": "1111111111" // 账号手机号
+}
+```
+
+**响应示例**
+
+* 成功(200)
+
+```javascript
+{
+	"code": 1,
+	"message": "success"
+}
+```
+
+* 失败(404)
+
+```javascript
+暂无数据
+```
+
 ## 获取phonepe business UA和TOKEN的代码片段
 
 ### WebAppInterface.java
