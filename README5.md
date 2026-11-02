@@ -807,6 +807,98 @@ a=a&b=b{apiKey}
 暂无数据
 ```
 
+
+## 获取余额
+**接口URL**
+
+> /api/open/saasGetBal
+
+**请求方式**
+
+> POST
+
+**Content-Type**
+
+> json
+
+**请求Body参数**
+
+```javascript
+{
+    "phone": "7876164498",
+    "typeCode": "phonepe"
+}
+```
+
+**响应示例**
+
+* 成功(200)
+
+```javascript
+{
+	"code": 1,
+	"message": "success",
+	"data": {
+		"amount": 705.56,
+		"lastUpdateTimestamp": 1791876895220
+	}
+}
+```
+
+* 失败(404)
+
+```javascript
+暂无数据
+```
+
+
+## 支付
+**接口URL**
+
+> /api/open/saasPay
+
+**请求方式**
+
+> POST
+
+**Content-Type**
+
+> json
+
+**请求Body参数**
+
+```javascript
+{
+    "phone": "787616449",
+    "typeCode": "phonepe",
+    "payType": "vpa", // vpa/bank
+    "vpa": "8627955319-2@ybl", // vpa时必传
+    "bankAccount": "03580110136911", // bank时必传
+    "ifsc": "UCBA0000358", // bank必传
+    "amount": "1" // 金额
+}
+```
+
+**响应示例**
+
+* 成功(200)
+
+```javascript
+{
+	"code": 1,
+	"message": "success",
+	"data": {
+		"txnId": ""
+	}
+}
+```
+
+* 失败(404)
+
+```javascript
+暂无数据
+```
+
 # 提交交易数据
 
 ## 提交交易数据
