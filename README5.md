@@ -1,1406 +1,695 @@
-# 全局公共参数
+# UPay Open API 文档
 
-**全局Header参数**
+> Base URL: `/api/open`
+> 请求方式: 全部为 `POST`，`Content-Type: application/json`
+> 鉴权: `X-API-KEY` + `X-SIGN`（见第 1 节）
+> 响应格式: `{ "code": 1, "message": "success", "englishMessage": null, "data": ... }`
 
-| 参数名 | 示例值 | 参数类型 | 是否必填 | 参数描述 |
-| --- | --- | ---- | ---- | ---- |
-| X-API-KEY | bbbb | string | 是 | APIKEY |
-| X-SIGN | aaaa | string | 是 | 签名 |
+本文档对应 `OpenApiController`（`/api/open/*`），供商户/渠道方以 API Key 方式接入：钱包列表、OTP 收发、
+收款地址查询、账单查询、钱包绑定/解绑、银行卡列表、余额查询、代付、补单。
 
+接口覆盖的钱包：Mobikwik / PhonePe / Paytm / BharatPe / Amazon Pay / Airtel / Freecharge 以及 Yape（秘鲁）。
 
-# 支付
+---
 
+## 1. 接入与鉴权
 
-### 签名与验签
+### 1.1 获取 API Key
 
-#### 请求参数签名
+在商户后台的 API Key 页面创建密钥，创建后会返回：
 
-##### Header请求参数
-
-| 请求头参数名 | 描述说明 |
+| 字段 | 说明 |
 | --- | --- |
-| X-API-KEY | APIKEY |
-| X-SIGN | 参数签名 |
+| `apiKey` | 24 字节随机数做 base64url（无 padding）后的字符串，放在请求头 `X-API-KEY` |
+| `apiSecret` | 48 字节随机数做 base64url（无 padding）后的字符串，**只用于本地计算签名，绝不随请求发送** |
+| `whiteIp` | IP 白名单，多个用英文逗号分隔；为空表示不限制 |
 
-** 筛选
-获取所有请求参数，不包括字节类型参数，如⽂件、字节流，剔除sign与sign_type参数。
+### 1.2 请求头
 
-** 排序
-将筛选的参数按照第⼀个字符的键值ASCII码递增排序（字⺟升序排序），如果遇到相同字符则按照第⼆个字符的键值ASCII码递增排序，以此类推。
+| Header | 必传 | 说明 |
+| --- | --- | --- |
+| `Content-Type` | 是 | 固定 `application/json` |
+| `X-API-KEY` | 是 | 1.1 中的 `apiKey` |
+| `X-SIGN` | 是 | 按 1.3 计算的签名，**大写十六进制** |
 
-** 拼接
-将排序后的参数与其对应值，组合成“参数=参数值”的格式，并且把这些参数⽤&字符连接起来，此时⽣
-成的字符串为待签名字符串。MD5签名的商户需要将key的值拼接在字符串后⾯，调⽤MD5算法⽣成sign
+> 请求来源 IP 必须命中 `whiteIp`（`whiteIp` 为空时不校验）。
 
+### 1.3 签名规则
 
-##### 返回参数验证签名
-** 筛选
-获取所有请求参数，不包括字节类型参数，如⽂件、字节流，剔除sign与sign_type参数。
+签名只针对 **请求体 JSON**，不包含 URL、query 和请求头。
 
-** 排序
-将筛选的参数按照第⼀个字符的键值ASCII码递增排序（字⺟升序排序），如果遇到相同字符则按照第⼆个字符的键值ASCII码递增排序，以此类推。
+1. 把请求体解析成 JSON 对象；
+2. 去掉 `sign`、`sign_type` 两个字段（其他字段即使服务端不认识，也必须参与签名）；
+3. 按 key 的字典序（`TreeMap`，区分大小写）升序排列；
+4. 逐个拼成 `key=value`，用 `&` 连接，**跳过值为空字符串或纯空白的字段**；
+5. 末尾直接拼接 `apiSecret`（**没有** `&key=` 之类的分隔符）；
+6. 对整串做 MD5，输出大写十六进制。
 
-** 拼接
-将排序后的参数与其对应值，组合成“参数=参数值”的格式，并且把这些参数⽤&字符连接起来，此时⽣
-成的字符串为待签名字符串。MD5签名的商户需要将key的值拼接在字符串后⾯，调⽤MD5算法⽣成sign
+值转字符串规则（与请求体里的写法要一致）：
 
-#### 签名参考代码
+| JSON 类型 | 参与签名的字符串 |
+| --- | --- |
+| 字符串 | 原样 |
+| 数字 | 数字的字面值，如 `100`、`10.5` |
+| 布尔 | `true` / `false` |
+| 对象/数组 | 紧凑 JSON（当前接口没有嵌套参数，建议一律用字符串） |
+
+示例：请求体与密钥
+
+```json
+{ "phone": "987654321", "typeCode": "yape" }
+```
+
+```
+apiSecret = 5f2b9c7d1e4a8b3f6c0d9e2a7b5c4d8e
+待签名串   = phone=987654321&typeCode=yape5f2b9c7d1e4a8b3f6c0d9e2a7b5c4d8e
+X-SIGN     = F5010DCA05AB917D6348196B4EBF3465
+```
+
+Python：
+
+```python
+import hashlib, json
+
+def sign(body: dict, secret: str) -> str:
+    params = {k: v for k, v in body.items() if k not in ("sign", "sign_type")}
+    parts = []
+    for k in sorted(params):
+        v = params[k]
+        if isinstance(v, bool):
+            v = "true" if v else "false"
+        else:
+            v = str(v)
+        if v.strip():
+            parts.append(f"{k}={v}")
+    return hashlib.md5(("&".join(parts) + secret).encode("utf-8")).hexdigest().upper()
+```
+
+Java：
 
 ```java
-import java.io.UnsupportedEncodingException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.*;
-
-import com.alibaba.fastjson2.JSON;
-
-public class SignGenerator {
-
-    /**
-     * 生成签名
-     * @param params 请求参数
-     * @param key 商户密钥
-     * @return 生成的签名
-     */
-    public static String generateSign(Map<String, Object> params, String key) {
-        // 1. 筛选参数
-        Map<String, Object> filteredParams = filterParams(params);
-
-        // 2. 排序参数
-        SortedMap<String, Object> sortedParams = new TreeMap<>(filteredParams);
-
-        // 3. 拼接参数
-        String signString = buildSignString(sortedParams);
-
-        // 4. 拼接 key 并生成 MD5 签名
-        return md5(signString + key);
-    }
-
-    /**
-     * 筛选参数，排除字节类型参数、sign 与 sign_type 参数
-     * @param params 原始参数
-     * @return 筛选后的参数
-     */
-    private static Map<String, Object> filterParams(Map<String, Object> params) {
-        Map<String, Object> filteredParams = new HashMap<>();
-        for (Map.Entry<String, Object> entry : params.entrySet()) {
-            String key = entry.getKey();
-            if (!"sign".equals(key) && !"sign_type".equals(key)) {
-                // 这里简单认为非字节类型参数，实际可根据具体情况调整
-                filteredParams.put(key, entry.getValue());
-            }
-        }
-        return filteredParams;
-    }
-
-    /**
-     * 构建待签名字符串
-     * @param sortedParams 排序后的参数
-     * @return 待签名字符串
-     */
-    private static String buildSignString(SortedMap<String, Object> sortedParams) {
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, Object> entry : sortedParams.entrySet()) {
-            String key = entry.getKey();
-            String value = convertToString(entry.getValue());
-            if (value != null && !"".equals(value.trim())) {
-                if (sb.length() > 0) {
-                    sb.append("&");
-                }
-                sb.append(key).append("=").append(value);
-            }
-        }
-        return sb.toString();
-    }
-
-    private static String convertToString(Object value) {
-        if (value == null) {
-            return "";
-        }
-        if (value instanceof String) {
-            return (String) value;
-        } else if (value instanceof Number) {
-            return value.toString();
-        } else if (value instanceof Boolean) {
-            return Boolean.toString((Boolean) value);
-        } else {
-            return JSON.toJSONString(value);
-        }
-    }
-
-    /**
-     * 生成 MD5 签名
-     * @param input 输入字符串
-     * @return MD5 签名结果
-     */
-    private static String md5(String input) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] messageDigest = md.digest(input.getBytes("UTF-8"));
-            StringBuilder hexString = new StringBuilder();
-            for (byte b : messageDigest) {
-                String hex = Integer.toHexString(0xFF & b);
-                if (hex.length() == 1) {
-                    hexString.append('0');
-                }
-                hexString.append(hex);
-            }
-            return hexString.toString().toUpperCase();
-        } catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static void main(String[] args) {
-        Map<String, Object> params = new HashMap<>();
-        params.put("merchantOrderNo", "111");
-        params.put("amount", "20");
-        params.put("remark", "test is test");
-        params.put("sign", "old_sign");
-        params.put("sign_type", "MD5");
-        String key = "-OWQz0xOqtRtJTxbn5UzhQ3W4aMANY9mZFvRC2z6pNX2FcyVXkNsARsyfchLipB7";
-
-        String sign = generateSign(params, key);
-        System.out.println("Generated Sign: " + sign);
-    }
-}
-```
-```
-a=a&b=b{apiKey}
+String sign = SignGenerator.generateSign(JSON.parseObject(body), apiSecret);
 ```
 
+注意事项：
 
-## 查询支持钱包列表
+- 没有任何参数的接口（如 `/saasBankList`）**也必须发送 `{}` 作为请求体**，此时签名为 `MD5(apiSecret)` 的大写结果。空请求体或非 JSON 请求体会在鉴权阶段直接失败。
+- 服务端按实际收到的 JSON 重新计算签名，所以**签名的内容和发出去的内容必须完全一致**；多带一个自定义字段也要一起签。
+- 金额、手机号等参数建议统一用字符串，避免数字类型在不同语言里序列化差异导致签名不一致。
 
-**接口URL**
+### 1.4 调用示例
 
-> /api/open/saasBankList
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-}
+```bash
+curl -X POST 'https://<host>/api/open/saasGetBal' \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: 3TqWc0h2yJ8mN5vB1xL9fK7p' \
+  -H 'X-SIGN: F5010DCA05AB917D6348196B4EBF3465' \
+  -d '{"phone":"987654321","typeCode":"yape"}'
 ```
 
+### 1.5 通用响应
 
-**响应示例**
+业务成功：
 
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": [
-		{
-			"name": "Mobikwik",
-			"code": "mobikwik",
-			"type": "app",  // otp/app
-			"downloadUrl": "", // app的下载链接
-			"sell": true,
-			"buy": true
-		},
-    ]
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-## OTP类型钱包登录
-
-**接口URL**
-
-> /api/open/saasOtpSend
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "1", // 10位印度手机号
-    "typeCode": "mobikwikotp", // mobikwikotp/phonepebusiness/paytmbusiness/amazonpay/airtel
-    "password":"", // paytmbusiness 需要
-    "ua":"", // phonepebusiness 需要
-    "token": "", // phonepebusiness 需要
-    "proxyIp":"", // 代理IP
-    "proxyPort":10000, // 代理端口
-    "proxyUsername":"", // 代理用户名
-    "proxyPassword":"" // 代理密码
-    "sendWhatApps": false, // amazonpay 有效 false sms和whatsapp都发送/ true 只发送whatsapp 
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": {
-		"requestId": "6ac8b76b0f993f03fbb5a099",
-		"timestamp": 1791539059832,
-		"expireIn": 300
-	}
-}
-```
-
-* 网络错误
-```javascript
-{
-	"code": 400,
-	"message": "network error"
-}
-```
-* 账号不能使用otp登录（亚马逊账号设置了2步验证、密码）
-```javascript
-{
-	"code": 400,
-	"message": "account not use otp login"
-}
-```
-* 账号未注册
-```javascript
-{
-	"code": 400,
-	"message": "account not registered"
-}
-```
-* 发送太频繁
-```javascript
-{
-	"code": 400,
-	"message": "send otp too many"
-}
-```
-* 未知错误
-```javascript
-{
-	"code": 400,
-	"message": "unknow error"
-}
-```
-* 账号已绑定（需要离线再otp绑定）
-```javascript
-{
-	"code": 400,
-	"message": "account is binding user ID."
-}
-```
-* paytmbusiness密码不正确
-```javascript
-{
-	"code": 400,
-	"message": "Invalid Paytm Business account or password."
-}
-```
-* 账号被封
-```javascript
-{
-	"code": 400,
-	"message": "account ban"
-}
-```
-* 未进行UPI验证
-```javascript
-{
-	"code": 400,
-	"message": "account not bind upi"
-}
-亚马逊UPI验证步骤：
-1. Device binding: The app sends an SMS from your phone to confirm your SIM matches your bank-linked number.
-2. Bank link: Your accounts are fetched via that number.
-3. UPI PIN: Verified with debit card last 6 digits, expiry, and OTP.
-4. Payments: Receiver's VPA is validated via NPCI, and each payment needs your UPI PIN.
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-## OTP类型钱包验证
-**接口URL**
-
-> /api/open/saasOtpVerity
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "otp": "448057",
-    "requestId": "6ac8b76b0f993f03fbb5a099"
-    "isEmail": false // 只有amazonpay 才有邮箱验证
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
+```json
 {
   "code": 1,
   "message": "success",
-  "data": true
-}
-```
-* otp错误
-```javascript
-{
-	"code": 400,
-	"message": "incorrect otp"
-}
-```
-* requestId错误
-```javascript
-{
-	"code": 400,
-	"message": "requestId error"
-}
-```
-* 账号被封
-```javascript
-{
-	"code": 400,
-	"message": "account ban"
-}
-```
-* 网络错误
-```javascript
-{
-	"code": 400,
-	"message": "network error"
-}
-```
-* 未知错误
-```javascript
-{
-	"code": 400,
-	"message": "unknow error"
-}
-```
-* 需要邮箱验证(amazonpay)
-```javascript
-{
-	"code": 400,
-	"message": "need_email_verify:xxx@gmail.com"
+  "englishMessage": null,
+  "data": { }
 }
 ```
 
-* 失败(404)
+业务失败（HTTP 状态码仍为 200）：
 
-```javascript
-暂无数据
-```
-
-
-## 获取VPA列表
-**接口URL**
-
-> /api/open/saasVpa
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
+```json
 {
-    "phone": "8627955319",
-    "typeCode": "mobikwikotp"
+  "code": 400,
+  "message": "account not found",
+  "englishMessage": null,
+  "data": null
 }
 ```
 
-**响应示例**
+| 字段 | 说明 |
+| --- | --- |
+| `code` | `1` 成功；非 1 为失败，见 1.6 |
+| `message` | 提示信息。业务失败时是具体原因（如 `account not found`） |
+| `englishMessage` | 预留字段，一般为 `null` |
+| `data` | 业务数据；无返回值的接口为 `null` |
 
-* 成功(200)
+`/saasGetTrans` 的 `data` 是分页结构：
 
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": [
-		{
-			"pa": "Q549243885@ybl",
-			"pn": "",
-            "isAdmin": true // paytmbusiness/phonepebusiness的账号 是否是主账号
-		},
-		{
-			"pa": "Q309562627@ybl",
-			"pn": "",
-            "isAdmin": true // paytmbusiness/phonepebusiness的账号 是否是主账号
-		},
-		{
-			"pa": "Q030582922@ybl",
-			"pn": "",
-            "isAdmin": true // paytmbusiness/phonepebusiness的账号 是否是主账号
-		}
-	]
-}
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `pageNum` | Integer | 当前页，从 1 开始 |
+| `pageSize` | Integer | 每页条数 |
+| `total` | Long | 总条数 |
+| `pages` | Integer | 总页数 |
+| `data` | Array | 当前页数据 |
+
+### 1.6 错误码
+
+| code | 场景 |
+| --- | --- |
+| `1` | 成功 |
+| `400` | 业务失败。所有接口内部的异常都会被统一包成 400，具体原因看 `message` |
+| `401` | 鉴权失败。`X-API-KEY`/`X-SIGN` 缺失、API Key 不存在、签名不匹配、IP 不在白名单。**该响应只有 `code`/`message` 两个字段** |
+| `500` | 服务端异常，或请求体不是合法 JSON（例如 `"System busy"`） |
+
+鉴权失败的 `message` 取值：
+
+| message | 原因 |
+| --- | --- |
+| `API Key or Sign is required` | 缺少 `X-API-KEY` 或 `X-SIGN` |
+| `API Key is invalid` | API Key 不存在或被删除 |
+| `[x.x.x.x] not in white ips, please add it` | 来源 IP 不在白名单 |
+| `Sign is invalid` | 签名不一致（最常见：参与签名的字段/取值与实际请求体不符） |
+
+常见业务 `message`：
+
+| message | 说明 |
+| --- | --- |
+| `phone is empty` / `typeCode is empty` | 必填参数缺失 |
+| `phone should be 10 digits` | OTP 相关接口要求 10 位印度手机号 |
+| `yape phone must be 8 digits` | Yape 手机号为 8 位；带 `+51`/`51`/`00591`/`0051` 前缀也可，服务端会截取后 8 位 |
+| `typeCode is invalid` / `xxx not support otp` | 钱包类型不存在，或该类型不支持 OTP |
+| `account not found` | 账号不存在，或未绑定到当前 API Key 所属用户 |
+| `account bind other user` | 账号已绑定到其他用户 |
+| `account unauthorized` | 账号被禁用/封禁 |
+| `retry again` | 同类请求正在处理（分布式锁未释放），稍后重试 |
+| `third pay error` | 上游钱包返回失败，`message` 里可能带上游原文 |
+
+### 1.7 钱包类型 typeCode
+
+| 分类 | typeCode |
+| --- | --- |
+| OTP 类（`otpType`） | `mobikwikotp_v2`、`mobikwikotp`、`phonepebusiness`、`paytmbusiness`、`amazonpay`、`airtel`、`freecharge`、`phonepeotp`、`bharotp` |
+| 应用类（`appType`） | `mobikwik`、`phonepe`、`paytm`、`bhar`、`mobikwik_wallet_auto_buy`、`yape` |
+
+- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`
+- 支持代付（`buy`）：`paytm`、`phonepe`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`
+
+---
+
+## 2. 基础接口
+
+### 2.1 获取钱包列表
+
+```
+POST /saasBankList
 ```
 
-* 失败(400)
+**请求参数**：无（请求体传 `{}`）。
 
-```javascript
-账号不存在
-{
-	"code": 400,
-	"message": "account not found" 
-}
-网络错误
-{
-	"code": 400,
-	"message": "network error"
-}
-请求未正常返回错误
-{
-	"code": 400,
-	"message": "request error"
-}
-账号未授权
-{
-	"code": 400,
-	"message": "account unauthorized"
-}
-```
+**响应**：`SaasBankListDto` 数组，仅返回后台启用且类型可识别的钱包。
 
-## 获取账单
-**接口URL**
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | String | 钱包名称，如 `Yape` |
+| `code` | String | 钱包类型 `typeCode` |
+| `type` | String | `otp` 或 `app`，决定后续走 OTP 流程还是绑定流程 |
+| `downloadUrl` | String | App 下载地址，没有时为空串 |
+| `sell` | Boolean | 是否支持代收 |
+| `buy` | Boolean | 是否支持代付 |
 
-> /api/open/saasGetTrans
+**示例**：
 
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "startTime": 1791505822726,
-    "endTime": 1791515822726,
-    "phone": "8627955319",
-    "typeCode": "airtel",
-    "page": 1,
-    "pageSize": 10
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": {
-		"pageNum": 1,
-		"pageSize": 10,
-		"total": 10,
-		"pages": 1,
-		"data": [
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8bf6",
-				"type": "RECEIVED_PAYMENT", // RECEIVED_PAYMENT 收 / SENT_PAYMENT 付
-				"phone": "8627955319",
-				"payer": "pashaxnasha-2@okicici", // 付款人
-                "payee": "", // 收款人
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS", // 交易状态 SUCCESS 成功 / FAILED 失败 / PENDING 进行中
-				"txnDate": 1789454271659, // 交易时间
-				"txnId": "625803276137",
-				"utr": "625803276137",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.675Z",
-                "sourceFrom": "balance" // balance余额/bank银行卡/others其他
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8bf8",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "pashaxnasha-2@okicici",
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789453140581,
-				"txnId": "625865360761",
-				"utr": "625865360761",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.677Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8bfa",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "pashaxnasha-2@okicici",
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789452991318,
-				"txnId": "625804889400",
-				"utr": "625804889400",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.678Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8bfc",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "ajayandta2-3@okicici",
-				"amount": "1.13",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789382243304,
-				"txnId": "625772908674",
-				"utr": "625772908674",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.679Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8bfe",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "7876243733@mbkns",
-				"amount": "2.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789120337927,
-				"txnId": "625415879465",
-				"utr": "625415879465",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.680Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8c00",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "7876243733@mbkns",
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789120013721,
-				"txnId": "625415215314",
-				"utr": "625415215314",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.681Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8c02",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "ajayandta2-3@okicici",
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789119961164,
-				"txnId": "662039125923",
-				"utr": "662039125923",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.682Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8c04",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "zeppyzebra@axl",
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1789119943472,
-				"txnId": "T2609111515405535389135",
-				"utr": "248956606566",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.684Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8c06",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"payer": "ajayandta2-3@okicici",
-				"amount": "10.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1788962628614,
-				"txnId": "661832872746",
-				"utr": "661832872746",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.686Z"
-			},
-			{
-				"_id": "6ac8b4fa9f9c6d78ccce8c08",
-				"type": "RECEIVED_PAYMENT",
-				"phone": "8627955319",
-				"amount": "1.00",
-				"currency": "INR",
-				"status": "SUCCESS",
-				"txnDate": 1788947038319,
-				"txnId": "T2609091513582816968561",
-				"bindUserID": "test",
-				"createTime": "2026-10-09T09:33:46.687Z"
-			}
-		]
-	}
-}
-```
-
-* 请求太快，10秒
-```javascript
-{
-	"code": 400,
-	"message": "request too quick"
-}
-```
-* 账号不存在
-```javascript
-{
-	"code": 400,
-	"message": "account not found"
-}
-```
-* 拉取账单失败
-```javascript
-{
-	"code": 400,
-	"message": "sync bill failed"
-}
-```
-* 账号未授权
-```javascript
-{
-	"code": 400,
-	"message": "account unauthorized"
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-## 钱包登出
-**接口URL**
-
-> /api/open/saasWalletLogout
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "8627955319",
-    "typeCode": "airtel"
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
+```json
 {
   "code": 1,
   "message": "success",
-  "data": true
+  "englishMessage": null,
+  "data": [
+    {
+      "name": "Yape",
+      "code": "yape",
+      "type": "app",
+      "downloadUrl": "/api/consumer/res/download/yape.apk",
+      "sell": true,
+      "buy": true
+    }
+  ]
 }
 ```
 
-* 失败(404)
+---
 
-```javascript
-暂无数据
+### 2.2 发送 OTP
+
+```
+POST /saasOtpSend
 ```
 
-# APP绑定
-在APP上完成登录、转账操作后，提交手机号绑定
+适用 `otpType` 列表中的钱包。
 
-## 绑定钱包
-**接口URL**
+**请求参数**：
 
-> /api/open/saasBindApp
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 10 位印度手机号；带 `+91` 前缀会自动去掉 |
+| `typeCode` | String | 是 | 必须是 1.7 中 `otpType` 的类型 |
+| `password` | String | 条件 | `paytmbusiness` 必传 |
+| `ua` | String | 条件 | `phonepebusiness` 必传 |
+| `token` | String | 条件 | `phonepebusiness` 必传 |
+| `proxyIp` | String | 否 | 指定出口代理 |
+| `proxyPort` | Integer | 否 | 代理端口 |
+| `proxyUsername` | String | 否 | 代理用户名 |
+| `proxyPassword` | String | 否 | 代理密码 |
+| `sendWhatApps` | Boolean | 否 | 是否通过 WhatsApp 下发，默认 `false` |
 
-**请求方式**
+**响应**：`SaasOtpSendRespDto`
 
-> POST
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `requestId` | String | 本次 OTP 会话 ID，校验时原样回传 |
+| `timestamp` | Long | 发送时间戳（毫秒） |
+| `expireIn` | Long | 有效期 |
+| `message` | String | 附加提示 |
 
-**Content-Type**
+**示例**：
 
-> json
+```json
+{ "phone": "9876543210", "typeCode": "mobikwikotp", "sendWhatApps": false }
+```
 
-**请求Body参数**
-
-```javascript
+```json
 {
-    "phone": "7876164498",
-    "typeCode": "phonepe",
-    "proxyIp": "global.rotgb.711proxy.com",
-    "proxyPort": 10000,
-    "proxyUsername": "USER977875-zone-custom-region-IN-session-5e9b1d3f7a0c4e8b2f6d1a5e9c3b7f0d-sessTime-30-sessAuto-1",
-    "proxyPassword": "9a3e89"
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": true
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-
-## 获取余额
-**接口URL**
-
-> /api/open/saasGetBal
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "7876164498",
-    "typeCode": "phonepe"
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": {
-		"amount": 705.56,
-		"lastUpdateTimestamp": 1791876895220
-	}
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-
-## 支付
-**接口URL**
-
-> /api/open/saasPay
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "phone": "787616449",
-    "typeCode": "phonepe",
-    "payType": "vpa", // vpa/bank
-    "vpa": "8627955319-2@ybl", // vpa时必传
-    "bankAccount": "03580110136911", // bank时必传
-    "ifsc": "UCBA0000358", // bank必传
-    "amount": "1" // 金额
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success",
-	"data": {
-		"txnId": ""
-	}
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-# 提交交易数据
-
-## 提交交易数据
-**接口URL**
-
-> /api/open/submitTrade
-
-**请求方式**
-
-> POST
-
-**Content-Type**
-
-> json
-
-**请求Body参数**
-
-```javascript
-{
-    "txnId": "787616449sdsd8", // txnId
-    "utr": "1111111111", // utr
-    "txnTime": 1792565321514, // 交易时间
-    "amount": "100.00", // 交易金额
-    "typeCode": "mobikwikotp", // 账号类型
-    "phone": "1111111111" // 账号手机号
-}
-```
-
-**响应示例**
-
-* 成功(200)
-
-```javascript
-{
-	"code": 1,
-	"message": "success"
-}
-```
-
-* 失败(404)
-
-```javascript
-暂无数据
-```
-
-## 获取phonepe business UA和TOKEN的代码片段
-
-### WebAppInterface.java
-```java
-import android.app.DownloadManager;
-import android.content.ClipboardManager;
-import android.content.Context;
-import android.content.Intent;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
-import android.net.Uri;
-import android.os.Build;
-import android.os.Environment;
-import android.webkit.JavascriptInterface;
-import android.webkit.URLUtil;
-
-public class WebAppInterface {
-    Context mContext;
-
-    WebAppInterface(Context c) {
-        mContext = c;
-    }
-
-    /**
-     * JS 调用：打开一个新的 WebView 页面加载指定 url。
-     * window.AndroidBridge.openWebView("https://example.com")
-     */
-    @JavascriptInterface
-    public void openWebView(String url) {
-        if (url == null || url.isEmpty()) {
-            return;
-        }
-        WebViewActivity.open(mContext, url);
-    }
-
-    /**
-     * JS 调用：关闭所有由 openWebView 打开的 WebView 页面。
-     * window.AndroidBridge.closeWebView()
-     */
-    @JavascriptInterface
-    public void closeWebView() {
-        WebViewActivity.closeAll();
-    }
-
-    /**
-     * JS 调用：异步 JS 执行完成后把结果回传给原生。
-     * 因为 evaluateJavascript 的回调只能拿到同步返回值，
-     * 异步（await/Promise）结果需要通过这个桥接方法主动回调。
-     * window.AndroidBridge.setToken(result)
-     */
-    @JavascriptInterface
-    public void setToken(String result) {
-        WebViewActivity.TOKEN = result;
-        WebViewActivity.closeAll();
-    }
-
-    @JavascriptInterface
-    public void setPhone(String result) {
-        // 仅记录手机号，不在此关闭页面：
-        // setPhone 在 hcaptcha/setToken 之前调用，若此处 closeAll 会导致后续流程中断。
-        WebViewActivity.PHONE = result;
-    }
-
-    @JavascriptInterface
-    public String getToken() {
-        return WebViewActivity.TOKEN;
-    }
-
-    @JavascriptInterface
-    public String getUA() {
-        return WebViewActivity.UA;
-    }
-
-    @JavascriptInterface
-    public String getPhone() {
-        return WebViewActivity.PHONE;
-    }
-}
-```
-
-### WebViewActivity.java
-```java
-import android.content.Context;
-import android.content.Intent;
-import android.net.Uri;
-import android.os.Build;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.os.SystemClock;
-import android.view.View;
-import android.webkit.CookieManager;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
-import android.widget.ProgressBar;
-import android.widget.Toast;
-
-import androidx.activity.OnBackPressedCallback;
-import androidx.appcompat.app.AppCompatActivity;
-
-import java.io.ByteArrayInputStream;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-
-/**
- * 可由 JS 打开的新 WebView 页面。
- * 通过 {@link WebAppInterface#openWebView(String)} 启动，
- * 通过静态方法 {@link #closeAll()} 关闭所有已打开的实例。
- */
-public class WebViewActivity extends AppCompatActivity {
-    public static String TOKEN = "";
-
-    public static String PHONE = "";
-
-    public static String UA = "";
-
-    public static final String EXTRA_URL = "extra_url";
-
-    // 打开后自动关闭的延时（毫秒）
-    private static final long AUTO_CLOSE_DELAY_MS = 60_000L;
-
-    // 连点去抖动窗口（毫秒）：此窗口内的重复 open 调用会被忽略
-    private static final long OPEN_DEBOUNCE_MS = 1_000L;
-    private static long sLastOpenTime = 0L;
-
-    // 需要拦截并打印请求头的目标接口路径
-    private static final String TARGET_API_PATH = "apis/mi-web/v2/auth/web/login/initiate";
-
-    // 记录所有存活的实例，供静态关闭方法使用（线程安全）
-    private static final Set<WebViewActivity> INSTANCES =
-            Collections.synchronizedSet(new HashSet<WebViewActivity>());
-
-    private WebView myWebView;
-    private ProgressBar progressBar;
-
-    private final Handler autoCloseHandler = new Handler(Looper.getMainLooper());
-    private final Runnable autoCloseRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (!isFinishing()) {
-                finish();
-            }
-        }
-    };
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_webview);
-
-        INSTANCES.add(this);
-
-        myWebView = findViewById(R.id.webview);
-        progressBar = findViewById(R.id.progressBar);
-
-        if (myWebView == null) {
-            Toast.makeText(this, "Error: WebView not found.", Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
-        String url = getIntent() != null ? getIntent().getStringExtra(EXTRA_URL) : null;
-        if (url == null || url.isEmpty()) {
-            Toast.makeText(this, "Error: no url.", Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
-        setupWebView();
-        setupBackPressLogic();
-        myWebView.loadUrl(url);
-
-        // 60 秒后自动关闭当前 WebView 页面
-        // autoCloseHandler.postDelayed(autoCloseRunnable, AUTO_CLOSE_DELAY_MS);
-    }
-
-    private void setupWebView() {
-        WebSettings settings = myWebView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setDatabaseEnabled(true);
-        settings.setAllowFileAccess(true);
-        settings.setUseWideViewPort(true);
-        settings.setLoadWithOverviewMode(true);
-        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-//        String newUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36";
-//        settings.setUserAgentString(newUserAgent);
-
-        myWebView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-
-                if (url.startsWith("paytmsms:")) {
-                    String[] split = url.split(",");
-                    String phone = split[0].replace("paytmsms:", "");
-                    String message = split[1];
-                    SmsUtils.sendSMS(WebViewActivity.this, phone, message);
-                    return true;
-                }
-                if (url.startsWith("sms:")) {
-                    startExternalActivity(new Intent(Intent.ACTION_SENDTO, Uri.parse(url)));
-                    return true;
-                }
-                if (url.startsWith("tel:")) {
-                    startExternalActivity(new Intent(Intent.ACTION_DIAL, Uri.parse(url)));
-                    return true;
-                }
-                if (url.startsWith("mailto:")) {
-                    startExternalActivity(new Intent(Intent.ACTION_SENDTO, Uri.parse(url)));
-                    return true;
-                }
-                return false;
-            }
-
-            // 拦截 WebView 发出的所有资源/接口请求（XHR、fetch、静态资源等）
-            // 注意：此回调运行在非 UI 线程，返回 null 表示不改变默认加载行为
-            @Override
-            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                if (url.contains(TARGET_API_PATH) && request.getMethod().equals("POST")) {
-                    logRequestHeaders(request);
-                    UA = request.getRequestHeaders().getOrDefault("User-Agent", "");
-                    // 执行异步 JS：evaluateJavascript 的回调只能拿到同步返回值，
-                    // 拿不到 await/Promise 的结果，因此异步完成后需通过
-                    // AndroidBridge.setToken 主动把结果回传给原生。
-                    final String asyncJs =
-                            "(async function(){" +
-                                    "  var __mask = document.getElementById('__nativeLoadingMask');" +
-                                    "  if (!__mask) {" +
-                                    "    __mask = document.createElement('div');" +
-                                    "    __mask.id = '__nativeLoadingMask';" +
-                                    "    __mask.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;" +
-                                    "z-index:9999;background:#fff;display:flex;align-items:center;justify-content:center;';" +
-                                    "    var __sp = document.createElement('div');" +
-                                    "    __sp.style.cssText = 'width:44px;height:44px;border:4px solid rgba(0,0,0,0.15);" +
-                                    "border-top-color:#333;border-radius:50%;animation:__nspin 0.8s linear infinite;';" +
-                                    "    if (!document.getElementById('__nativeLoadingStyle')) {" +
-                                    "      var __st = document.createElement('style');" +
-                                    "      __st.id = '__nativeLoadingStyle';" +
-                                    "      __st.textContent = '@keyframes __nspin{to{transform:rotate(360deg)}}';" +
-                                    "      document.head.appendChild(__st);" +
-                                    "    }" +
-                                    "    __mask.appendChild(__sp);" +
-                                    "    document.body.appendChild(__mask);" +
-                                    "  }" +
-                                    "  try {" +
-                                    "    var __phoneEl = document.querySelector('[data-id=\"login-identifier-input\"]');" +
-                                    "    window.AndroidBridge.setPhone(__phoneEl ? (__phoneEl.value || '') : '');" +
-                                    "    if (!window.hcaptcha) { window.AndroidBridge.setToken('ERR:hcaptcha undefined'); return; }" +
-                                    "    const r = await window.hcaptcha.execute(undefined, { async: true });" +
-                                    "    window.AndroidBridge.setToken(r && r.response ? r.response : JSON.stringify(r));" +
-                                    "await new Promise(r => setTimeout(r, 10000));" +
-                                    "  } catch (e) {" +
-                                    "    window.AndroidBridge.setToken('ERR:' + String(e));" +
-                                    "  } finally {" +
-                                    "    var __m = document.getElementById('__nativeLoadingMask');" +
-                                    "    if (__m && __m.parentNode) { __m.parentNode.removeChild(__m); }" +
-                                    "  }" +
-                                    "})();";
-                    // 关键：shouldInterceptRequest 在非 UI 线程回调，
-                    // evaluateJavascript 必须切回 UI 线程执行，否则会被静默忽略。
-                    view.post(() -> view.evaluateJavascript(asyncJs, null));
-                    autoCloseHandler.postDelayed(autoCloseRunnable, AUTO_CLOSE_DELAY_MS);
-                    // 拦截目标接口：不发送到服务端，直接返回一个空响应
-                    return buildBlockedResponse();
-                }
-                return super.shouldInterceptRequest(view, request);
-            }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                progressBar.setVisibility(View.GONE);
-
-                // 页面加载完成后检查登录手机号输入框是否存在，
-                // 不存在则视为页面打开异常，通过桥接回传错误。
-                final String checkJs =
-                        "(function(){" +
-                                "  var __phoneEl = document.querySelector('[data-id=\"login-identifier-input\"]');" +
-                                "  if (!__phoneEl) { window.AndroidBridge.setToken('ERR:open page error'); }" +
-                                "})();";
-                view.evaluateJavascript(checkJs, null);
-            }
-        });
-
-        myWebView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onProgressChanged(WebView view, int newProgress) {
-                progressBar.setProgress(newProgress);
-                progressBar.setVisibility(newProgress == 100 ? View.GONE : View.VISIBLE);
-            }
-        });
-
-        // 同一个桥接对象，支持在新 WebView 中继续 open/close
-        myWebView.addJavascriptInterface(new WebAppInterface(this), "AndroidBridge");
-    }
-
-    // 构建一个空响应，用于拦截目标接口，使其不真正发往服务端
-    private WebResourceResponse buildBlockedResponse() {
-        WebResourceResponse response = new WebResourceResponse(
-                "application/json",
-                "utf-8",
-                new ByteArrayInputStream(new byte[0]));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            Map<String, String> respHeaders = new HashMap<>();
-            respHeaders.put("Access-Control-Allow-Origin", "*");
-            response.setStatusCodeAndReasonPhrase(204, "No Content");
-            response.setResponseHeaders(respHeaders);
-        }
-        return response;
-    }
-
-    // 打印目标接口请求的请求头
-    private void logRequestHeaders(WebResourceRequest request) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[intercept] ").append(request.getMethod()).append(" ")
-                .append(request.getUrl().toString()).append("\n");
-        Map<String, String> headers = request.getRequestHeaders();
-        if (headers != null && !headers.isEmpty()) {
-            sb.append("headers:\n");
-            for (Map.Entry<String, String> entry : headers.entrySet()) {
-                sb.append("  ").append(entry.getKey()).append(": ")
-                        .append(entry.getValue()).append("\n");
-            }
-        } else {
-            sb.append("headers: <empty>\n");
-        }
-
-        // WebView 不会把 Cookie 放进 getRequestHeaders()（它在此回调之后由内核附加），
-        // 因此直接从 CookieManager 读取该 URL 对应的 Cookie 补充打印。
-        String cookie = CookieManager.getInstance().getCookie(request.getUrl().toString());
-        sb.append("cookie: ").append(cookie == null ? "<none>" : cookie).append("\n");
-
-        LogUtils.printLog(sb.toString());
-    }
-
-    private void startExternalActivity(Intent intent) {
-        try {
-            startActivity(intent);
-        } catch (Exception e) {
-            Toast.makeText(this, "Unable to open app", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void setupBackPressLogic() {
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override
-            public void handleOnBackPressed() {
-                if (myWebView.canGoBack()) {
-                    myWebView.goBack();
-                } else {
-                    finish();
-                }
-            }
-        });
-    }
-
-    @Override
-    protected void onDestroy() {
-        autoCloseHandler.removeCallbacks(autoCloseRunnable);
-        INSTANCES.remove(this);
-        if (myWebView != null) {
-            myWebView.destroy();
-            myWebView = null;
-        }
-        super.onDestroy();
-    }
-
-    /**
-     * 启动一个新的 WebView 页面。
-     * 通过时间去抖动防止按钮连点导致重复打开：
-     * startActivity 是异步的，短时间内的第二次调用此时实例可能还没进入 INSTANCES，
-     * 因此这里用一个同步的时间窗口来拦截重复触发。
-     */
-    public static synchronized void open(Context context, String url) {
-        long now = SystemClock.elapsedRealtime();
-        if (now - sLastOpenTime < OPEN_DEBOUNCE_MS) {
-            return; // 去抖动：忽略过快的重复调用
-        }
-        sLastOpenTime = now;
-
-        Intent intent = new Intent(context, WebViewActivity.class);
-        intent.putExtra(EXTRA_URL, url);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        context.startActivity(intent);
-    }
-
-    /**
-     * 静态方法：关闭所有已由 JS 打开的 WebView 页面。
-     */
-    public static void closeAll() {
-        WebViewActivity[] snapshot;
-        synchronized (INSTANCES) {
-            snapshot = INSTANCES.toArray(new WebViewActivity[0]);
-        }
-        for (WebViewActivity activity : snapshot) {
-            if (activity != null && !activity.isFinishing()) {
-                activity.runOnUiThread(activity::finish);
-            }
-        }
-    }
-}
-
-```
-
-
-### h5 中打开webview, 获取 UA和TOKEN
-```javascript
-async function handlePhonePeBusiness() {
-  const bridge = (window as any).AndroidBridge
-  // No native bridge: this flow is only available inside the App
-  if (!bridge?.openWebView) {
-    showToast({ message: 'This operation is only available in the App', duration: 3000 })
-    return
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": {
+    "requestId": "66f1c2a0e4b0a1b2c3d4e5f6",
+    "timestamp": 1783420800000,
+    "expireIn": 300,
+    "message": "OTP sent"
   }
-
-  stopTokenPoll()
-  bridge.setToken?.('')
-  bridge.openWebView('https://business.phonepe.com/login')
-
-  showLoadingToast({ message: 'Waiting for login...', forbidClick: true, duration: 0 })
-
-  const POLL_INTERVAL = 1000
-  const TIMEOUT = 120000
-  const startedAt = Date.now()
-
-  tokenPollTimer = setInterval(async () => {
-    if (Date.now() - startedAt >= TIMEOUT) {
-      stopTokenPoll()
-      closeToast()
-      showToast({ message: 'Login timed out. Please try again.', duration: 3000 })
-      return
-    }
-
-    const token = bridge.getToken?.() || ''
-    if (!token) return
-    console.log(token)
-
-    // Got a token: stop polling and proceed
-    stopTokenPoll()
-
-    if (!token.startsWith('P1_')) {
-      closeToast()
-      showToast({ message: 'Send OTP failed', duration: 3000 })
-      return
-    }
-    const ua = bridge.getUA?.() || ''
-    console.log('UA:' + ua + ' token:' + token)
-    closeToast()
-  }, POLL_INTERVAL)
 }
 ```
+
+**注意**：
+
+- 同一 `phone + typeCode` 在 60 秒内重复调用会**直接返回缓存结果**（`requestId` 不变），不会重复下发短信。
+- 如果账号已存在但状态不是启用，会先清空其绑定关系再重新走 OTP 流程。
+
+---
+
+### 2.3 校验 OTP
+
+```
+POST /saasOtpVerity
+```
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `otp` | String | 是 | 用户收到的验证码 |
+| `requestId` | String | 是 | 2.2 返回的 `requestId` |
+| `email` | Boolean | 否 | 是否走邮箱验证码，默认 `false`；也接受 `isEmail` 这个字段名 |
+
+**响应**：`Boolean`，`true` 表示校验通过。
+
+**示例**：
+
+```json
+{ "otp": "123456", "requestId": "66f1c2a0e4b0a1b2c3d4e5f6", "email": false }
+```
+
+**注意**：账号已经是启用状态且已绑定当前用户时，直接返回 `true`，不再调用上游校验。
+
+---
+
+### 2.4 查询收款地址
+
+```
+POST /saasVpa
+```
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 钱包类型 |
+
+**响应**：`UpiDto` 数组
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `pa` | String | 收款地址（UPI ID）。**Yape 没有 UPI，返回账号手机号** |
+| `pn` | String | 收款人姓名 |
+| `isAdmin` | Boolean | 是否为管理员账号 |
+
+**示例**：
+
+```json
+{ "phone": "987654321", "typeCode": "yape" }
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": [
+    { "pa": "987654321", "pn": "Juan Perez", "isAdmin": false }
+  ]
+}
+```
+
+**注意**：
+
+- 账号必须已绑定到当前 API Key 所属用户，否则返回 `account not found`。
+- 结果缓存 10 秒；同一账号并发请求会串行执行。
+- Yape 会先查一次余额做探活，登录态失效（`-50200`）时会把账号置为封禁并返回 `account unauthorized`。
+
+---
+
+### 2.5 查询账单
+
+```
+POST /saasGetTrans
+```
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `startTime` | Long | 是 | 开始时间（毫秒时间戳），闭区间 |
+| `endTime` | Long | 是 | 结束时间（毫秒时间戳），闭区间 |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 钱包类型 |
+| `page` | Integer | 否 | 页码，从 1 开始，默认 `1` |
+| `pageSize` | Integer | 否 | 每页条数，默认 `20` |
+
+**响应**：`PageResult<HistoryTradeVo>`，`data` 内每条记录字段如下：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `_id` | String | 账单记录 ID |
+| `type` | String | `SENT_PAYMENT`（支出）/ `RECEIVED_PAYMENT`（收入） |
+| `phone` | String | 钱包账号手机号 |
+| `payee` | String | 收款方 |
+| `payer` | String | 付款方 |
+| `amount` | String | 金额，两位小数字符串 |
+| `currency` | String | 币种，Yape 为 `PEN` |
+| `status` | String | `SUCCESS` / `PENDING` / `FAILED` 等 |
+| `additionalDetail` | String | 附言/备注 |
+| `txnDate` | Long | 交易时间（毫秒时间戳） |
+| `txnId` | String | 交易号 |
+| `utr` | String | 银行流水号；没有时是空串 |
+| `bindUserID` | String | 固定空串（不对外暴露归属） |
+| `error` | String | 失败原因 |
+| `manual` | String | 人工标记 |
+| `accountType` | String | 钱包类型 `typeCode` |
+| `createTime` | String | 入库时间，`yyyy-MM-dd'T'HH:mm:ss.SSS'Z'` |
+| `billType` | String | 账单分类 |
+| `sourceFrom` | String | `balance`（余额）/ `bank`（银行流水） |
+
+**示例**：
+
+```json
+{
+  "startTime": 1782403200000,
+  "endTime": 1783420800000,
+  "phone": "987654321",
+  "typeCode": "yape",
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": {
+    "pageNum": 1,
+    "pageSize": 20,
+    "total": 1,
+    "pages": 1,
+    "data": [
+      {
+        "_id": "66f1c2a0e4b0a1b2c3d4e5f6",
+        "type": "RECEIVED_PAYMENT",
+        "phone": "987654321",
+        "payee": "987654321",
+        "payer": "912345678",
+        "amount": "100.00",
+        "currency": "PEN",
+        "status": "SUCCESS",
+        "additionalDetail": "Pago de prueba",
+        "txnDate": 1783405205000,
+        "txnId": "0123456",
+        "utr": "0123456",
+        "bindUserID": "",
+        "error": null,
+        "manual": null,
+        "accountType": "yape",
+        "createTime": "2026-11-05T10:20:05.000Z",
+        "billType": null,
+        "sourceFrom": "bank"
+      }
+    ]
+  }
+}
+```
+
+**注意**：
+
+- 查询前会先增量同步一次该账号的最新账单（受账号创建时间、最近 30 天、`startTime` 三者较晚者限制），再查本地库，所以首次调用可能稍慢。
+- **Yape 服务端只保留最近 3 个月流水**，同步也只回溯 3 个自然月，更早的数据查不到。
+- `type` 只返回收支两类；`SUCCESS` 但没有 `utr` 的记录会显示为 `PENDING`；`utr` 为 `no utr` / `history utr` 时统一返回空串。
+- 同一账号的同步有分布式锁，并发调用会等待，最长 60 秒。
+
+---
+
+### 2.6 解绑钱包
+
+```
+POST /saasWalletLogout
+```
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 钱包类型 |
+
+**响应**：无 `data`（`data: null`）。
+
+**示例**：
+
+```json
+{ "phone": "987654321", "typeCode": "yape" }
+```
+
+**注意**：
+
+- 只解绑**当前用户**名下的账号：`bindUserID` 清空、状态重置为 `INIT`，同时把用户 ID 记入历史绑定列表。
+- 账号已绑定其他用户时不会报错，但也不会解绑（匹配不到记录）。同一账号重复解绑返回成功。
+- Yape 手机号会先做归一化（支持 `+51` 等前缀）。
+
+---
+
+## 3. 应用钱包
+
+### 3.1 绑定钱包
+
+```
+POST /saasBindApp
+```
+
+适用 `appType` 列表中的钱包（`saasOtpSend` 走 OTP 流程，本接口走账号绑定）。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号。Yape 为 8 位，可带 `+51`/`51`/`00591`/`0051` |
+| `typeCode` | String | 是 | 钱包类型；`mobikwik_wallet_auto_buy` 找不到账号时会回退到 `mobikwik` |
+| `proxyIp` | String | 否 | 指定出口代理，绑定成功后会落库 |
+| `proxyPort` | Integer | 否 | 代理端口 |
+| `proxyUsername` | String | 否 | 代理用户名 |
+| `proxyPassword` | String | 否 | 代理密码 |
+| `picUrl` | String | 条件 | **Yape 必传（与 `picBase64` 二选一）**。头像图片地址 |
+| `picBase64` | String | 条件 | **Yape 必传（与 `picUrl` 二选一）**。头像图片 base64，可带 `data:image/png;base64,` 前缀 |
+
+**响应**：`Boolean`，`true` 表示绑定成功。
+
+**示例（Yape，头像用 base64）**：
+
+```json
+{
+  "phone": "987654321",
+  "typeCode": "yape",
+  "picBase64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+}
+```
+
+**注意**：
+
+- 账号必须已存在（先由运营/后台导入），否则返回 `account not found`。
+- 账号已绑定其他用户时返回 `account bind other user`。
+- **Yape 头像规则**：
+  - `picUrl` 与 `picBase64` 至少传一个，都传时以 `picUrl` 为准；
+  - 图片最大 5 MB，`picUrl` 下载超时 10 秒；
+  - 保存路径为服务端 `resBak/yapepic/{手机号}.png`，统一转成 PNG 落盘（无法解码的图片原样写入）；
+  - 头像会在登录校验之前保存，所以头像有问题时不会产生绑定。
+- 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`。
+
+---
+
+### 3.2 查询余额
+
+```
+POST /saasGetBal
+```
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 钱包类型 |
+
+**响应**：`SaasGetBalanceRespDto`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `amount` | BigDecimal | 当前余额 |
+| `lastUpdateTimestamp` | Long | 余额对应的时间戳（毫秒） |
+
+**示例**：
+
+```json
+{ "phone": "987654321", "typeCode": "yape" }
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": { "amount": 1520.50, "lastUpdateTimestamp": 1783420800000 }
+}
+```
+
+**注意**：
+
+- 账号必须已绑定当前用户，否则 `account not found`。
+- Yape 余额缓存 10 分钟，缓存命中时 `lastUpdateTimestamp` 是缓存写入时间，不是本次查询时间。
+- 上游返回余额异常时返回 `GET Balance ERROR`。
+
+---
+
+### 3.3 发起代付
+
+```
+POST /saasPay
+```
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | **付款方**账号手机号（从哪个钱包出款） |
+| `typeCode` | String | 是 | 钱包类型 |
+| `payType` | String | 是 | `vpa` 或 `bank` |
+| `vpa` | String | 条件 | `payType=vpa` 必传，收款方收款地址。**Yape 传收款方手机号** |
+| `bankAccount` | String | 条件 | `payType=bank` 必传，收款银行账号 |
+| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape 传 `YapeUtils` 银行表中的代码，如 `1005`（BANCO DE CREDITO / BCP） |
+| `payeeName` | String | 条件 | 收款人全名。**Yape 银行代付必传**；其他钱包可忽略 |
+| `amount` | String | 是 | 金额，必须大于 0；Yape 会四舍五入到两位小数 |
+
+**响应**：`SaasPayRespDto`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `txnId` | String | 上游交易号 |
+
+**示例（Yape 代付到银行卡）**：
+
+```json
+{
+  "phone": "987654321",
+  "typeCode": "yape",
+  "payType": "bank",
+  "bankAccount": "1234567890",
+  "ifsc": "1005",
+  "payeeName": "Juan Perez",
+  "amount": "100.00"
+}
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": { "txnId": "a1b2c3d4-0000-0000-0000-000000000001" }
+}
+```
+
+**注意**：
+
+- 账号必须已绑定当前用户，否则 `account not found`。
+- Yape `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败（`validateAccount failed, target name is empty`）。
+- **超时/网络异常的语义**：如果转账请求已经发出但没拿到结果，返回
+  `Payment is being processed by the bank.`。此时**不要直接重试**，应通过 2.5 查询账单或人工对账确认结果，
+  避免重复出款。转账未发出时的网络问题返回 `network error`。
+- 上游明确失败时返回 `third pay error` 或上游原始错误信息。
+
+---
+
+## 4. 订单
+
+### 4.1 补单
+
+```
+POST /submitTrade
+```
+
+把一笔外部订单的凭证补录到服务端，按 `txnId + utr + userID` 做 upsert（重复提交幂等）。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `txnId` | String | 是 | 订单号 |
+| `utr` | String | 是 | 银行流水号/凭证号 |
+| `txnTime` | Long | 是 | 交易时间（毫秒时间戳） |
+| `amount` | String | 是 | 金额 |
+| `phone` | String | 是 | 相关账号手机号 |
+| `typeCode` | String | 是 | 钱包类型 |
+
+**响应**：无 `data`（`data: null`）。
+
+**示例**：
+
+```json
+{
+  "txnId": "P20261107154012345FXN",
+  "utr": "0123456789",
+  "txnTime": 1783420800000,
+  "amount": "100.00",
+  "phone": "987654321",
+  "typeCode": "yape"
+}
+```
+
+**注意**：同一 `txnId + utr` 重复提交只会覆盖更新 `phone`/`amount`/`txnTime`/`typeCode`，不会产生重复订单。
+
+---
+
+## 5. 接入检查清单
+
+1. 请求统一 `POST`，`Content-Type: application/json`，请求体必须是合法 JSON 对象（无参数也传 `{}`）。
+2. 每次请求都带上 `X-API-KEY` 和按 1.3 计算的 `X-SIGN`；签名只覆盖请求体，值建议全部用字符串。
+3. 先调 `/saasBankList` 拿到 `typeCode` 与 `type`，OTP 类走 `/saasOtpSend` + `/saasOtpVerity`，应用类走 `/saasBindApp`。
+4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`。
+5. 代付遇到 `Payment is being processed by the bank.` 不要重试，先查账单或人工确认。
+6. 判断结果只看 `code`（`1` 为成功），HTTP 状态码不代表业务结果。
