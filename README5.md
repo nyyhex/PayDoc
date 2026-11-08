@@ -23,6 +23,8 @@
 | `apiKey` | 24 字节随机数做 base64url（无 padding）后的字符串，放在请求头 `X-API-KEY` |
 | `apiSecret` | 48 字节随机数做 base64url（无 padding）后的字符串，**只用于本地计算签名，绝不随请求发送** |
 | `whiteIp` | IP 白名单，多个用英文逗号分隔；为空表示不限制 |
+| `depositCallbackUrl` | 代收回调地址 |
+| `payoutCallbackUrl` | 代付回调地址 |
 
 ### 1.2 请求头
 
@@ -189,6 +191,8 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 
 - 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`
 - 支持代付（`buy`）：`paytm`、`phonepe`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`
+
+> 接口参数里的 `userID` 一律被忽略，服务端用 API Key 绑定的用户强制覆盖，无需传递。
 
 ---
 
@@ -515,12 +519,48 @@ POST /saasBindApp
 | `proxyPort` | Integer | 否 | 代理端口 |
 | `proxyUsername` | String | 否 | 代理用户名 |
 | `proxyPassword` | String | 否 | 代理密码 |
-| `picUrl` | String | 条件 | **Yape 必传（与 `picBase64` 二选一）**。头像图片地址 |
-| `picBase64` | String | 条件 | **Yape 必传（与 `picUrl` 二选一）**。头像图片 base64，可带 `data:image/png;base64,` 前缀 |
 
 **响应**：`Boolean`，`true` 表示绑定成功。
 
-**示例（Yape，头像用 base64）**：
+**示例**：
+
+```json
+{
+  "phone": "987654321",
+  "typeCode": "yape"
+}
+```
+
+**注意**：
+
+- 账号必须已存在（先由运营/后台导入），否则返回 `account not found`。
+- 账号已绑定其他用户时返回 `account bind other user`。
+- 本接口不处理头像；需要更新 Yape 头像请调 `3.2 上传头像`。
+- 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`。
+
+---
+
+### 3.2 上传头像
+
+```
+POST /saasUploadPic
+```
+
+单独上传账号头像，与绑定流程解耦：**绑定前、绑定后都可以调用**，已存在的头像会被新图覆盖。
+目前仅支持 `typeCode=yape`。**不校验账号是否存在/归属**，按归一化后的手机号直接落盘。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | Yape 手机号，8 位；可带 `+51`/`51`/`00591`/`0051` 前缀，服务端截取后 8 位 |
+| `typeCode` | String | 是 | 固定 `yape`，其他类型返回 `xxx not support upload pic` |
+| `picUrl` | String | 条件 | 图片地址，与 `picBase64` 二选一必传 |
+| `picBase64` | String | 条件 | 图片 base64，可带 `data:image/png;base64,` 前缀，与 `picUrl` 二选一必传 |
+
+**响应**：无 `data`（`data: null`）。
+
+**示例**：
 
 ```json
 {
@@ -530,20 +570,20 @@ POST /saasBindApp
 }
 ```
 
+```json
+{ "code": 1, "message": "success", "englishMessage": null, "data": null }
+```
+
 **注意**：
 
-- 账号必须已存在（先由运营/后台导入），否则返回 `account not found`。
-- 账号已绑定其他用户时返回 `account bind other user`。
-- **Yape 头像规则**：
-  - `picUrl` 与 `picBase64` 至少传一个，都传时以 `picUrl` 为准；
-  - 图片最大 5 MB，`picUrl` 下载超时 10 秒；
-  - 保存路径为服务端 `resBak/yapepic/{手机号}.png`，统一转成 PNG 落盘（无法解码的图片原样写入）；
-  - 头像会在登录校验之前保存，所以头像有问题时不会产生绑定。
-- 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`。
+- `picUrl` 与 `picBase64` 都传时以 `picUrl` 为准；两个都不传返回 `picUrl or picBase64 is required`。
+- 规则：最大 5 MB，`picUrl` 下载超时 10 秒，统一转成 JPEG 存到 `resBak/yapepic/{手机号}.jpg`（透明区域铺白底），图片无法解码返回 `pic is not a valid image`。
+- 不校验账号是否存在、是否绑定其他用户：只要 `phone`/`typeCode` 合法就落盘，可提前为未导入的账号准备头像。
+- 覆盖是「临时文件 + 原子替换」，不会因为编码失败留下半张旧图。
 
 ---
 
-### 3.2 查询余额
+### 3.3 查询余额
 
 ```
 POST /saasGetBal
@@ -586,7 +626,7 @@ POST /saasGetBal
 
 ---
 
-### 3.3 发起代付
+### 3.4 发起代付
 
 ```
 POST /saasPay
@@ -690,6 +730,6 @@ POST /submitTrade
 1. 请求统一 `POST`，`Content-Type: application/json`，请求体必须是合法 JSON 对象（无参数也传 `{}`）。
 2. 每次请求都带上 `X-API-KEY` 和按 1.3 计算的 `X-SIGN`；签名只覆盖请求体，值建议全部用字符串。
 3. 先调 `/saasBankList` 拿到 `typeCode` 与 `type`，OTP 类走 `/saasOtpSend` + `/saasOtpVerity`，应用类走 `/saasBindApp`。
-4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`。
+4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`；头像需要单独更新时调 `/saasUploadPic`。
 5. 代付遇到 `Payment is being processed by the bank.` 不要重试，先查账单或人工确认。
 6. 判断结果只看 `code`（`1` 为成功），HTTP 状态码不代表业务结果。
