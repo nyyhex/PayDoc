@@ -641,7 +641,7 @@ POST /saasPay
 | `payType` | String | 是 | `vpa` 或 `bank` |
 | `vpa` | String | 条件 | `payType=vpa` 必传，收款方收款地址。**Yape 传收款方手机号** |
 | `bankAccount` | String | 条件 | `payType=bank` 必传，收款银行账号 |
-| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape 传 `YapeUtils` 银行表中的代码，如 `1005`（BANCO DE CREDITO / BCP） |
+| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape 传 3.6 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
 | `payeeName` | String | 条件 | 收款人全名。**Yape 银行代付必传**；其他钱包可忽略 |
 | `amount` | String | 是 | 金额，必须大于 0；Yape 会四舍五入到两位小数 |
 
@@ -682,6 +682,83 @@ POST /saasPay
   `Payment is being processed by the bank.`。此时**不要直接重试**，应通过 2.5 查询账单或人工对账确认结果，
   避免重复出款。转账未发出时的网络问题返回 `network error`。
 - 上游明确失败时返回 `third pay error` 或上游原始错误信息。
+
+---
+
+### 3.5 Yape 银行代码（`ifsc`）
+
+`payType=bank` 且 `typeCode=yape` 时，`ifsc` 传下表的 `bank_code`。服务端按代码查出银行名称与缩写，
+作为 `bank_name` / `bank_acronym` 提交给 Yape；**代码必须与下表完全一致**（区分大小写，含 `MLD` 前缀），
+不在表中的代码会返回 `unknown code_bank <code>, see bankName(code)`。
+
+| bank_code | 银行名称 | 缩写 |
+| --- | --- | --- |
+| `1001` | BANCO NACIONAL DE BOLIVIA | BNB |
+| `1003` | BANCO MERCANTIL | BME |
+| `1005` | BANCO DE CREDITO | BCP |
+| `1007` | BANCO DE LA NACION ARGENTINA | BNA |
+| `1009` | BANCO BISA | BIS |
+| `1014` | BANCO UNION | BUN |
+| `1016` | BANCO ECONOMICO | BEC |
+| `1017` | BANCO SOL | BSOL |
+| `1018` | BANCO GANADERO | BGA |
+| `1033` | BANCO FIE S.A. | BIE |
+| `1034` | BANCO FORTALEZA | FOR |
+| `25009` | PANAMERICAN SAFI | SPA |
+| `27002` | CIDRE IFD | ICI |
+| `27003` | CRECER IFD | ICR |
+| `27004` | Diaconía IFD | DIA |
+| `27007` | FUNDACIÓN BOLIVIANA PARA EL DESARROLLO IFD | IFU |
+| `27009` | IDEPRO IFD | IID |
+| `27012` | Pro Mujer IFD. | PMIFD |
+| `3001` | COOPERATIVA JESUS NAZARENO | CJN |
+| `3002` | COOPERATIVA SAN MARTIN DE PORRES | CSM |
+| `3003` | COOPERATIVA FÁTIMA | CFA |
+| `3004` | COOPERATIVA LA MERCED | CLM |
+| `3011` | Cooperativa Pio X R.L. | CPX |
+| `3015` | COOPERATIVA QUILLACOLLO | CQC |
+| `3016` | COOPERATIVA SAN JOSE DE PUNATA | CJP |
+| `3025` | COOPERATIVA SAN MATEO | CST |
+| `3029` | COOPERATIVA EDUCADORES GRAN CHACO R.L. | CEC |
+| `3044` | COOPERATIVA CACEF | CCF |
+| `3048` | Cooperativa Magisterio Rural de Chuquisaca | CMD |
+| `51001` | LINKSER S.A. | LNK |
+| `51002` | ADMINISTRADORA DE TARJETAS DE CREDITO S.A. | ATC |
+| `53001` | EFECTIVO S.A | MEF |
+| `74002` | BANCO PYME ECOFUTURO S.A. | BECOF |
+| `74003` | BANCO PYME DE LA COMUNIDAD | PCO |
+| `75003` | LA PROMOTORA EFV | VPR |
+| `MLD10000` | BANCO CENTRAL DE BOLIVIA - MLD | BCBMLD |
+| `MLD1004` | BANCO CENTRAL DE BOLIVIA - COMPRA DE BONOS | BCB |
+| `MLD3005` | COOP SAN PEDRO LTDA. | CSP |
+| `MLD3006` | COOPERATIVA LOYOLA R.L. | CAL |
+| `MLD3007` | Cooperativa Catedral Tarija | 3007 |
+| `MLD3010` | COOPERATIVA SAN ANTONIO R.L. | CSA |
+| `MLD3012` | COOP INCA HUASI LTDA. | CIH |
+| `MLD3021` | COOP TRINIDAD LTDA | CTR |
+| `MLD3022` | COOP COMARAPA R.L. | CCM |
+| `MLD3024` | COOPERATIVA SAN ROQUE R.L. | 3024 |
+| `MLD3026` | EL CHOROLQUE R.L. | CCR |
+| `MLD3027` | Cooperativa Monsenor Felix Gainza R.L. | 3027 |
+| `MLD3028` | COOP MADRE Y MAESTRA LTDA. | CMM |
+| `MLD3030` | COOPERATIVA CATEDRAL R.L. | CCP |
+| `MLD3031` | Cooperativa Asunción R.L. | MLD |
+| `MLD3033` | COOP SAN JOSE DE BERMEJO LTDA | CJB |
+| `MLD3034` | Cooperativa Magisterio Rural | MLD303 |
+| `MLD3036` | COOPERATIVA SAN JOAQUIN R.L. | MCJO |
+| `MLD3043` | COOPERATIVA SAN CARLOS BORROMEO R.L. | CCB |
+| `MLD3046` | COOPERATIVA LA SAGRADA | CLS |
+| `MLD3047` | COOP PROGRESO R.L. | CPG |
+| `MLD3049` | COOPERATIVA SAN FRANCISCO SOLANO S.R.L | CFS |
+| `MLD3051` | COOPERATIVA SAN PEDRO DE AIQUILE R.L. | CSQ |
+| `MLD3052` | Cooperativa Societaria San Martín | MLD305 |
+| `MLD3054` | COOPERATIVA VIRGEN DE LOS REMEDIOS R.L. | CVE |
+| `MLD3055` | COOPERATIVA ASOCIACIÓN DE PRODUCTORES DE LECHE R.L. | COO |
+| `MLD3059` | COOPERATIVA HOSPICIO R.L. | 3059 |
+| `MLD75001` | LA PRIMERA ENTIDAD FINANCIERA DE VIVIENDA | VL1 |
+| `MLD75004` | EL PROGRESO ENTIDAD FINANCIERA DE VIVIENDA | VPG |
+
+> 简称列里有少数值是纯数字（如 `3007`、`3024`），这是上游银行表里的原始取值，按原样提交。
 
 ---
 
