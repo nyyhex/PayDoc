@@ -186,11 +186,15 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 
 | 分类 | typeCode |
 | --- | --- |
-| OTP 类（`otpType`） | `mobikwikotp_v2`、`mobikwikotp`、`phonepebusiness`、`paytmbusiness`、`amazonpay`、`airtel`、`freecharge`、`phonepeotp`、`bharotp` |
+| OTP 类（`otpType`） | `mobikwikotp_v2`、`mobikwikotp`、`phonepebusiness`、`paytmbusiness`、`amazonpay`、`airtel`、`freecharge`、`phonepeotp`、`bharotp`、`yapeotp` |
 | 应用类（`appType`） | `mobikwik`、`phonepe`、`paytm`、`bhar`、`mobikwik_wallet_auto_buy`、`yape` |
 
-- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`
-- 支持代付（`buy`）：`paytm`、`phonepe`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`
+- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`
+- 支持代付（`buy`）：`paytm`、`phonepe`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`
+
+> `yape` 与 `yapeotp` 是同一钱包（Yape，秘鲁）的两种接入方式：`yape` 走 `saasBindApp` 绑定，
+> `yapeotp` 走 `saasOtpSend` + `saasOtpVerity`（设备绑定 + 人脸 + 短信验证码），
+> 绑定完成后的余额、账单、收款地址、代付、头像接口完全一致，详见 2.7。
 
 > 接口参数里的 `userID` 一律被忽略，服务端用 API Key 绑定的用户强制覆盖，无需传递。
 
@@ -251,11 +255,12 @@ POST /saasOtpSend
 
 | 字段 | 类型 | 必传 | 说明 |
 | --- | --- | --- | --- |
-| `phone` | String | 是 | 10 位印度手机号；带 `+91` 前缀会自动去掉 |
+| `phone` | String | 是 | 10 位印度手机号；带 `+91` 前缀会自动去掉。**`yapeotp` 例外：8 位本地号，可带 `+51`/`51`/`00591`/`0051`，服务端截取后 8 位** |
 | `typeCode` | String | 是 | 必须是 1.7 中 `otpType` 的类型 |
-| `password` | String | 条件 | `paytmbusiness` 必传 |
+| `password` | String | 条件 | `paytmbusiness` 必传；**`yapeotp` 传 Yape 登录 PIN，必传** |
 | `ua` | String | 条件 | `phonepebusiness` 必传 |
 | `token` | String | 条件 | `phonepebusiness` 必传 |
+| `picBase64` | String | 条件 | **仅 `yapeotp` 使用**：人脸照片 base64（可带 `data:image/jpeg;base64,` 前缀，最大 5 MB）。新设备首次绑定必须过人脸；不传则读取 `3.2 上传头像` 落盘的照片 |
 | `proxyIp` | String | 否 | 指定出口代理 |
 | `proxyPort` | Integer | 否 | 代理端口 |
 | `proxyUsername` | String | 否 | 代理用户名 |
@@ -278,6 +283,10 @@ POST /saasOtpSend
 ```
 
 ```json
+{ "phone": "987654321", "typeCode": "yapeotp", "password": "123456" }
+```
+
+```json
 {
   "code": 1,
   "message": "success",
@@ -295,6 +304,7 @@ POST /saasOtpSend
 
 - 同一 `phone + typeCode` 在 60 秒内重复调用会**直接返回缓存结果**（`requestId` 不变），不会重复下发短信。
 - 如果账号已存在但状态不是启用，会先清空其绑定关系再重新走 OTP 流程。
+- `yapeotp` 的完整流程（设备注册 → 人脸 → 短信）见 2.7。
 
 ---
 
@@ -320,7 +330,12 @@ POST /saasOtpVerity
 { "otp": "123456", "requestId": "66f1c2a0e4b0a1b2c3d4e5f6", "email": false }
 ```
 
-**注意**：账号已经是启用状态且已绑定当前用户时，直接返回 `true`，不再调用上游校验。
+**注意**：
+
+- 账号已经是启用状态且已绑定当前用户时，直接返回 `true`，不再调用上游校验。
+- `yapeotp`：验证码错误或超过重试次数返回 `incorrect otp`；校验通过后账号状态变为启用并绑定到当前用户。
+  如果 2.2 已经完成设备关联（例如该设备此前已绑过，`message` 为 `account already logged in, no otp required`），
+  本接口会直接返回 `true`。
 
 ---
 
@@ -341,7 +356,7 @@ POST /saasVpa
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `pa` | String | 收款地址（UPI ID）。**Yape 没有 UPI，返回账号手机号** |
+| `pa` | String | 收款地址（UPI ID）。**Yape / Yape OTP 没有 UPI，返回账号手机号** |
 | `pn` | String | 收款人姓名 |
 | `isAdmin` | Boolean | 是否为管理员账号 |
 
@@ -366,7 +381,7 @@ POST /saasVpa
 
 - 账号必须已绑定到当前 API Key 所属用户，否则返回 `account not found`。
 - 结果缓存 10 秒；同一账号并发请求会串行执行。
-- Yape 会先查一次余额做探活，登录态失效（`-50200`）时会把账号置为封禁并返回 `account unauthorized`。
+- Yape / Yape OTP 会先查一次余额做探活，登录态失效（`-50200`）时会把账号置为封禁并返回 `account unauthorized`。
 
 ---
 
@@ -495,7 +510,57 @@ POST /saasWalletLogout
 
 - 只解绑**当前用户**名下的账号：`bindUserID` 清空、状态重置为 `INIT`，同时把用户 ID 记入历史绑定列表。
 - 账号已绑定其他用户时不会报错，但也不会解绑（匹配不到记录）。同一账号重复解绑返回成功。
-- Yape 手机号会先做归一化（支持 `+51` 等前缀）。
+- Yape / Yape OTP 手机号会先做归一化（支持 `+51` 等前缀）。
+
+---
+
+### 2.7 Yape OTP 设备绑定流程（`yapeotp`）
+
+`yapeotp` 与 `yape` 是同一个 Yape 钱包，区别只在**登录信息的获取方式**：`yape` 由 App 上报加密登录数据后调
+`3.1 绑定钱包`；`yapeotp` 完全由服务端通过网关的设备绑定接口完成，需要账号 **手机号 + PIN**，新设备还要再过一次**人脸**。
+
+对调用方来说，流程与普通 OTP 钱包一致，只是多两件事：**带 PIN**、**准备人脸照片**。
+
+**步骤**
+
+1. **准备人脸照片**（可选，但新设备首次绑定必需）
+   - 调 `3.2 上传头像`（`typeCode=yapeotp`）把照片存到服务端，或
+   - 直接在 `2.2 发送 OTP` 里带 `picBase64`。
+2. **发送 OTP** `POST /saasOtpSend`
+   ```json
+   { "phone": "987654321", "typeCode": "yapeotp", "password": "123456" }
+   ```
+   服务端依次执行：设备注册 → （新设备）人脸校验并自动下发短信 → （人脸过了但短信没发出）自动重发短信。
+   返回的 `requestId` 用于下一步，`expireIn` 为 `60`。
+   - `message = "account already logged in, no otp required"`：该设备已关联过，登录已完成，**无需再校验 OTP**
+     （仍可调用 2.3，会直接返回 `true`）。
+3. **校验 OTP** `POST /saasOtpVerity`
+   ```json
+   { "otp": "123456", "requestId": "66f1c2a0e4b0a1b2c3d4e5f6" }
+   ```
+   校验通过返回 `true`，账号变为启用并绑定到当前用户；之后即可使用 2.4 / 2.5 / 3.4 / 3.5 等接口。
+
+**常见错误**
+
+| 错误信息 | 说明 |
+| --- | --- |
+| `pin is required` | 未传 `password`（Yape PIN） |
+| `yape phone must be 8 digits` | 手机号不是 8 位且无法按国家码归一化 |
+| `selfie is required, please upload the face picture first` | 新设备需要人脸，但既没传 `picBase64` 也没有已上传的照片 |
+| `account is binding user ID.` | 该账号已绑定其他用户，不能重复走 OTP 绑定 |
+| `Proxy is null. Unable to submit.` | 未指定代理且代理池取不到可用代理 |
+| 网关返回的错误标题（如 `We couldn't find your account`） | 上游失败，原文透出，通常是手机号/PIN 错误 |
+| `incorrect otp` | 验证码错误或超过重试次数 |
+| `network error` | 网络异常，可重试 |
+
+**注意**：
+
+- 同一 `phone + typeCode` 有 60 秒结果缓存，成功后 60 秒内重复调 `saasOtpSend` 只会返回缓存的 `requestId`，
+  不会真的重新请求网关；发码失败不会写缓存，失败后可直接重试。
+- 设备档案和会话都会落库：再次调 `saasOtpSend` 时会带上已有设备信息重新注册，网关认得这台设备时
+  （已关联完）直接返回登录态，`message` 为 `account already logged in, no otp required`；仍需要人脸时才会重做人脸校验。
+  如果人脸通过但短信下发失败，同一次调用内会自动重发短信，不需要调用方重刷人脸。
+- `yapeotp` 与 `yape` 各自独立建账号（同一手机号可以同时存在两个类型的账号），互不影响。
 
 ---
 
@@ -537,6 +602,7 @@ POST /saasBindApp
 - 账号已绑定其他用户时返回 `account bind other user`。
 - 本接口不处理头像；需要更新 Yape 头像请调 `3.2 上传头像`。
 - 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`。
+- `yapeotp` **不走本接口**，请使用 2.2 + 2.3 的 OTP 流程（见 2.7）。
 
 ---
 
@@ -547,14 +613,15 @@ POST /saasUploadPic
 ```
 
 单独上传账号头像，与绑定流程解耦：**绑定前、绑定后都可以调用**，已存在的头像会被新图覆盖。
-目前仅支持 `typeCode=yape`。**不校验账号是否存在/归属**，按归一化后的手机号直接落盘。
+支持 `typeCode=yape` 与 `typeCode=yapeotp`；对 `yapeotp` 来说这张图同时作为 `2.2 发送 OTP` 时的人脸照片。
+**不校验账号是否存在/归属**，按归一化后的手机号直接落盘。
 
 **请求参数**：
 
 | 字段 | 类型 | 必传 | 说明 |
 | --- | --- | --- | --- |
 | `phone` | String | 是 | Yape 手机号，8 位；可带 `+51`/`51`/`00591`/`0051` 前缀，服务端截取后 8 位 |
-| `typeCode` | String | 是 | 固定 `yape`，其他类型返回 `xxx not support upload pic` |
+| `typeCode` | String | 是 | `yape` 或 `yapeotp`，其他类型返回 `xxx not support upload pic` |
 | `picUrl` | String | 条件 | 图片地址，与 `picBase64` 二选一必传 |
 | `picBase64` | String | 条件 | 图片 base64，可带 `data:image/png;base64,` 前缀，与 `picUrl` 二选一必传 |
 
@@ -579,6 +646,7 @@ POST /saasUploadPic
 - `picUrl` 与 `picBase64` 都传时以 `picUrl` 为准；两个都不传返回 `picUrl or picBase64 is required`。
 - 规则：最大 5 MB，`picUrl` 下载超时 10 秒，统一转成 JPEG 存到 `resBak/yapepic/{手机号}.jpg`（透明区域铺白底），图片无法解码返回 `pic is not a valid image`。
 - 不校验账号是否存在、是否绑定其他用户：只要 `phone`/`typeCode` 合法就落盘，可提前为未导入的账号准备头像。
+- `yape` 与 `yapeotp` 共用同一张照片（按手机号存 `resBak/yapepic/{手机号}.jpg`）。
 - 覆盖是「临时文件 + 原子替换」，不会因为编码失败留下半张旧图。
 
 ---
@@ -621,7 +689,7 @@ POST /saasGetBal
 **注意**：
 
 - 账号必须已绑定当前用户，否则 `account not found`。
-- Yape 余额缓存 10 分钟，缓存命中时 `lastUpdateTimestamp` 是缓存写入时间，不是本次查询时间。
+- Yape / Yape OTP 余额缓存 10 分钟，缓存命中时 `lastUpdateTimestamp` 是缓存写入时间，不是本次查询时间。
 - 上游返回余额异常时返回 `GET Balance ERROR`。
 
 ---
@@ -641,9 +709,9 @@ POST /saasPay
 | `payType` | String | 是 | `vpa` 或 `bank` |
 | `vpa` | String | 条件 | `payType=vpa` 必传，收款方收款地址。**Yape 传收款方手机号** |
 | `bankAccount` | String | 条件 | `payType=bank` 必传，收款银行账号 |
-| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape 传 3.6 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
-| `payeeName` | String | 条件 | 收款人全名。**Yape 银行代付必传**；其他钱包可忽略 |
-| `amount` | String | 是 | 金额，必须大于 0；Yape 会四舍五入到两位小数 |
+| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape / Yape OTP 传 3.6 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
+| `payeeName` | String | 条件 | 收款人全名。**Yape / Yape OTP 银行代付必传**；其他钱包可忽略 |
+| `amount` | String | 是 | 金额，必须大于 0；Yape / Yape OTP 会四舍五入到两位小数 |
 
 **响应**：`SaasPayRespDto`
 
@@ -677,7 +745,7 @@ POST /saasPay
 **注意**：
 
 - 账号必须已绑定当前用户，否则 `account not found`。
-- Yape `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败（`validateAccount failed, target name is empty`）。
+- Yape / Yape OTP `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败（`validateAccount failed, target name is empty`）。
 - **超时/网络异常的语义**：如果转账请求已经发出但没拿到结果，返回
   `Payment is being processed by the bank.`。此时**不要直接重试**，应通过 2.5 查询账单或人工对账确认结果，
   避免重复出款。转账未发出时的网络问题返回 `network error`。
@@ -687,7 +755,7 @@ POST /saasPay
 
 ### 3.5 Yape 银行代码（`ifsc`）
 
-`payType=bank` 且 `typeCode=yape` 时，`ifsc` 传下表的 `bank_code`。服务端按代码查出银行名称与缩写，
+`payType=bank` 且 `typeCode=yape` 或 `yapeotp` 时，`ifsc` 传下表的 `bank_code`。服务端按代码查出银行名称与缩写，
 作为 `bank_name` / `bank_acronym` 提交给 Yape；**代码必须与下表完全一致**（区分大小写，含 `MLD` 前缀），
 不在表中的代码会返回 `unknown code_bank <code>, see bankName(code)`。
 
@@ -807,6 +875,7 @@ POST /submitTrade
 1. 请求统一 `POST`，`Content-Type: application/json`，请求体必须是合法 JSON 对象（无参数也传 `{}`）。
 2. 每次请求都带上 `X-API-KEY` 和按 1.3 计算的 `X-SIGN`；签名只覆盖请求体，值建议全部用字符串。
 3. 先调 `/saasBankList` 拿到 `typeCode` 与 `type`，OTP 类走 `/saasOtpSend` + `/saasOtpVerity`，应用类走 `/saasBindApp`。
+   `yapeotp` 属于 OTP 类，发码时要带 PIN（`password`）和人脸照片（`picBase64` 或先调 `/saasUploadPic`），详见 2.7。
 4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`；头像需要单独更新时调 `/saasUploadPic`。
 5. 代付遇到 `Payment is being processed by the bank.` 不要重试，先查账单或人工确认。
 6. 判断结果只看 `code`（`1` 为成功），HTTP 状态码不代表业务结果。
