@@ -32,7 +32,7 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 接口根地址 | `https://fps-gateway.xyzbit7.com`（生产环境；测试环境地址由运营提供） |
+| 接口根地址 | 地址由运营提供 |
 | 请求方式 | 全部接口均为 `POST` |
 | 请求类型 | `Content-Type: application/json; charset=utf-8` |
 | 响应类型 | `application/json; charset=utf-8` |
@@ -215,7 +215,7 @@ public static String sign(Map<String, Object> params, String apiSecret) throws E
 ### 2.6 调用示例（curl）
 
 ```bash
-curl -X POST 'https://fps-gateway.xyzbit7.com/api/open/balance/query' \
+curl -X POST '/api/open/balance/query' \
   -H 'Content-Type: application/json' \
   -H 'X-API-KEY: your_api_key' \
   -H 'X-SIGN: 764AA60F19B6E9228B561A99B07ED28A' \
