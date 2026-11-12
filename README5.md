@@ -712,6 +712,8 @@ POST /saasPay
 | `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape / Yape OTP 传 3.6 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
 | `payeeName` | String | 条件 | 收款人全名。**Yape / Yape OTP 银行代付必传**；其他钱包可忽略 |
 | `amount` | String | 是 | 金额，必须大于 0；Yape / Yape OTP 会四舍五入到两位小数 |
+| `sourceOrigin` | String | 否 | 资金来源说明，PCC 要求时与 sourceDestination 一起补传（目前 Yape 使用） |
+| `sourceDestination` | String | 否 | 资金去向说明，PCC 要求时与 sourceOrigin 一起补传（目前 Yape 使用） |
 
 **响应**：`SaasPayRespDto`
 
