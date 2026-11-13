@@ -3,10 +3,10 @@
 > Base URL: `/api/open`
 > 请求方式: 全部为 `POST`，`Content-Type: application/json`
 > 鉴权: `X-API-KEY` + `X-SIGN`（见第 1 节）
-> 响应格式: `{ "code": 1, "message": "success", "englishMessage": null, "data": ... }`
+> 响应格式: `{ "code": 1, "message": "success", "englishMessage": null, "bizCode": null, "data": ... }`
 
 本文档对应 `OpenApiController`（`/api/open/*`），供商户/渠道方以 API Key 方式接入：钱包列表、OTP 收发、
-收款地址查询、账单查询、钱包绑定/解绑、银行卡列表、余额查询、代付、补单。
+收款地址查询、账单查询、钱包绑定/解绑、余额查询、代付、补单。
 
 接口覆盖的钱包：Mobikwik / PhonePe / Paytm / BharatPe / Amazon Pay / Airtel / Freecharge 以及 Yape（秘鲁）。
 
@@ -118,6 +118,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
   "code": 1,
   "message": "success",
   "englishMessage": null,
+  "bizCode": null,
   "data": { }
 }
 ```
@@ -129,6 +130,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
   "code": 400,
   "message": "account not found",
   "englishMessage": null,
+  "bizCode": "WALLET_ACCOUNT_NOT_FOUND",
   "data": null
 }
 ```
@@ -136,9 +138,15 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | 字段 | 说明 |
 | --- | --- |
 | `code` | `1` 成功；非 1 为失败，见 1.6 |
-| `message` | 提示信息。业务失败时是具体原因（如 `account not found`） |
+| `message` | 提示信息。业务失败时是具体原因（如 `account not found`），**保留原始/上游文案，可能逐次变化** |
 | `englishMessage` | 预留字段，一般为 `null` |
+| `bizCode` | **统一错误码**，一类错误一个固定值，见 1.6；成功时为 `null`。判断分支请用它，不要用 `message` 文案 |
 | `data` | 业务数据；无返回值的接口为 `null` |
+
+> ⚠️ 服务端序列化配置为**不输出 null 字段**：上面的示例是完整字段结构，实际返回里 `englishMessage`、
+> 成功时的 `bizCode`、以及为 `null` 的 `data` 都会**直接省略**，而不是输出 `null`。判断存在性请用「字段是否出现」或空值判断，两者等价。
+
+> 鉴权失败（`code: 401`）不走这个结构，只有 `code`/`message`。
 
 `/saasGetTrans` 的 `data` 是分页结构：
 
@@ -155,7 +163,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | code | 场景 |
 | --- | --- |
 | `1` | 成功 |
-| `400` | 业务失败。所有接口内部的异常都会被统一包成 400，具体原因看 `message` |
+| `400` | 业务失败。`/api/open/*` 里钱包相关的异常一律压成 400，**具体类别看 `bizCode`**，原始原因看 `message` |
 | `401` | 鉴权失败。`X-API-KEY`/`X-SIGN` 缺失、API Key 不存在、签名不匹配、IP 不在白名单。**该响应只有 `code`/`message` 两个字段** |
 | `500` | 服务端异常，或请求体不是合法 JSON（例如 `"System busy"`） |
 
@@ -168,19 +176,51 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `[x.x.x.x] not in white ips, please add it` | 来源 IP 不在白名单 |
 | `Sign is invalid` | 签名不一致（最常见：参与签名的字段/取值与实际请求体不符） |
 
-常见业务 `message`：
+#### 1.6.1 统一错误码 bizCode
 
-| message | 说明 |
-| --- | --- |
-| `phone is empty` / `typeCode is empty` | 必填参数缺失 |
-| `phone should be 10 digits` | OTP 相关接口要求 10 位印度手机号 |
-| `yape phone must be 8 digits` | Yape 手机号为 8 位；带 `+51`/`51`/`00591`/`0051` 前缀也可，服务端会截取后 8 位 |
-| `typeCode is invalid` / `xxx not support otp` | 钱包类型不存在，或该类型不支持 OTP |
-| `account not found` | 账号不存在，或未绑定到当前 API Key 所属用户 |
-| `account bind other user` | 账号已绑定到其他用户 |
-| `account unauthorized` | 账号被禁用/封禁 |
-| `retry again` | 同类请求正在处理（分布式锁未释放），稍后重试 |
-| `third pay error` | 上游钱包返回失败，`message` 里可能带上游原文 |
+钱包侧的失败会带一个固定的 `bizCode`：**一类错误一个值**，不同钱包、不同上游说法只要属于同一类，`bizCode` 就相同。
+因此判断分支、做多语言/展示文案映射都请基于 `bizCode`，不要匹配 `message` 文案（`message` 是上游原文，可能变化）。
+
+`bizCode` 为 `null`（因序列化配置，实际是**字段不出现**）的情况：`code` 为 `1`（成功）、`code` 为 `401`（鉴权失败），
+以及少数非钱包异常。只要 `code` 是 400 且来自钱包操作，`bizCode` 一定有值。
+
+| bizCode | 含义 | 建议提示 |
+| --- | --- | --- |
+| `WALLET_PARAM_INVALID` | 入参缺失/格式错误（含 Yape 要求补资金来源去向） | Invalid request parameters. |
+| `WALLET_PROXY_UNAVAILABLE` | 拿不到动态代理，请求没发出去，可直接重试 | Proxy is unavailable. Unable to submit. |
+| `WALLET_ACCOUNT_NOT_FOUND` | 账号不存在，或未在钱包侧注册 | Account not found or not registered. |
+| `WALLET_ACCOUNT_UNAUTHORIZED` | 账号不可用（unauthorized） | Account is not available. Please contact the administrator. |
+| `WALLET_ACCOUNT_BLOCKED` | 账号被上游封禁/风控拦截/黑名单，**重试无用** | Account is blocked by the wallet provider. Please contact its support. |
+| `WALLET_ACCOUNT_BIND_CONFLICT` | 账号已绑定到其他用户/手机号 | This account is already bound to another user. |
+| `WALLET_LOGIN_FAILED` | 账号或密码错误 | Invalid phone number or password. |
+| `WALLET_OTP_INVALID` | OTP 输错 | Incorrect OTP. Please check and try again. |
+| `WALLET_OTP_EXPIRED` | OTP 会话过期 | OTP has expired. Please resend the OTP. |
+| `WALLET_OTP_RATE_LIMITED` | 发送/校验 OTP 过于频繁，稍后重试 | Too many requests. Please try again later. |
+| `WALLET_SESSION_EXPIRED` | 上游登录会话失效，需重新登录/重绑 | Account session expired. Please log in again. |
+| `WALLET_NETWORK_ERROR` | 网络/连接/超时/上游 5xx，可重试 | Network error. Please try again. |
+| `WALLET_UPSTREAM_ERROR` | 上游失败但原因不明确，**兜底类** | The wallet provider failed to process the request. Please try again later. |
+| `WALLET_PAYMENT_PROCESSING` | 银行/钱包处理中，**不是失败**，勿重复提交 | Payment is being processed by the bank. |
+| `WALLET_NOT_SUPPORTED` | 当前钱包/账号不支持该操作 | This operation is not supported for this wallet. |
+| `WALLET_VERIFICATION_REQUIRED` | 需要邮箱二次验证（amazonpay），按 `message` 里的 hint 继续 | Additional verification is required. |
+| `WALLET_SYSTEM_ERROR` | 本服务自身问题（文件读写/系统忙） | System busy. Please try again later. |
+
+> 「建议提示」只是给接入方的展示话术参考，**不在返回体里**；改文案无需后端配合。
+> 完整的原始文案 → `bizCode` 对照、归类顺序与兜底规则见 [docs/wallet-error-codes.md](docs/wallet-error-codes.md)。
+
+常见业务 `message`（`message` 恒为原始文案，`bizCode` 才是稳定分类）：
+
+| message | 说明 | 通常的 bizCode |
+| --- | --- | --- |
+| `phone is empty` / `typeCode is empty` | 必填参数缺失 | `WALLET_PARAM_INVALID` |
+| `phone should be 10 digits` | OTP 相关接口要求 10 位印度手机号 | `WALLET_PARAM_INVALID` |
+| `yape phone must be 8 digits` | Yape 手机号为 8 位；带 `+51`/`51`/`00591`/`0051` 前缀也可，服务端会截取后 8 位 | `WALLET_PARAM_INVALID` |
+| `typeCode is invalid` | 钱包类型不存在 | `WALLET_PARAM_INVALID` |
+| `xxx not support otp` | 该钱包类型不支持 OTP 流程 | `WALLET_NOT_SUPPORTED` |
+| `account not found` | 账号不存在，或未绑定到当前 API Key 所属用户 | `WALLET_ACCOUNT_NOT_FOUND` |
+| `account bind other user` | 账号已绑定到其他用户 | `WALLET_ACCOUNT_BIND_CONFLICT` |
+| `account unauthorized` | 账号被禁用/封禁 | `WALLET_ACCOUNT_UNAUTHORIZED` |
+| `retry again` | 同类请求正在处理（分布式锁未释放），稍后重试 | `WALLET_UPSTREAM_ERROR` |
+| `third pay error` | 上游钱包返回失败，`message` 里可能带上游原文 | 按上游原文归类，认不出则 `WALLET_UPSTREAM_ERROR` |
 
 ### 1.7 钱包类型 typeCode
 
@@ -381,6 +421,8 @@ POST /saasVpa
 
 - 账号必须已绑定到当前 API Key 所属用户，否则返回 `account not found`。
 - 结果缓存 10 秒；同一账号并发请求会串行执行。
+- `bhar` / `bharotp` 会返回该账号在 BharatPe 上的全部收款 UPI（`ui/v1/profile` 的 `qr_layer.vpas`），
+  所以一个账号可能出现多条 `pa`；上游标记为失效的状态会被跳过，一个都取不到时退回收款二维码。
 - Yape / Yape OTP 会先查一次余额做探活，登录态失效（`-50200`）时会把账号置为封禁并返回 `account unauthorized`。
 
 ---
@@ -538,7 +580,7 @@ POST /saasWalletLogout
    ```json
    { "otp": "123456", "requestId": "66f1c2a0e4b0a1b2c3d4e5f6" }
    ```
-   校验通过返回 `true`，账号变为启用并绑定到当前用户；之后即可使用 2.4 / 2.5 / 3.4 / 3.5 等接口。
+   校验通过返回 `true`，账号变为启用并绑定到当前用户；之后即可使用 2.4 / 2.5 / 3.3 / 3.4 等接口。
 
 **常见错误**
 
@@ -552,6 +594,11 @@ POST /saasWalletLogout
 | 网关返回的错误标题（如 `We couldn't find your account`） | 上游失败，原文透出，通常是手机号/PIN 错误 |
 | `incorrect otp` | 验证码错误或超过重试次数 |
 | `network error` | 网络异常，可重试 |
+
+> 右列对应的 `bizCode` 见 1.6.1：`pin is required`/`yape phone must be 8 digits`/`selfie is required…` →
+> `WALLET_PARAM_INVALID`；`account is binding user ID.` → `WALLET_ACCOUNT_BIND_CONFLICT`；
+> `Proxy is null…` → `WALLET_PROXY_UNAVAILABLE`；`incorrect otp` → `WALLET_OTP_INVALID`；
+> `network error` → `WALLET_NETWORK_ERROR`；网关错误标题 → `WALLET_UPSTREAM_ERROR`。
 
 **注意**：
 
@@ -598,10 +645,11 @@ POST /saasBindApp
 
 **注意**：
 
-- 账号必须已存在（先由运营/后台导入），否则返回 `account not found`。
-- 账号已绑定其他用户时返回 `account bind other user`。
+- 账号必须已存在（先由运营/后台导入），否则返回 `account not found`（`WALLET_ACCOUNT_NOT_FOUND`）。
+- 账号已绑定其他用户时返回 `account bind other user`（`WALLET_ACCOUNT_BIND_CONFLICT`）。
 - 本接口不处理头像；需要更新 Yape 头像请调 `3.2 上传头像`。
-- 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`。
+- 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`
+  （`WALLET_LOGIN_FAILED`）。
 - `yapeotp` **不走本接口**，请使用 2.2 + 2.3 的 OTP 流程（见 2.7）。
 
 ---
@@ -709,11 +757,9 @@ POST /saasPay
 | `payType` | String | 是 | `vpa` 或 `bank` |
 | `vpa` | String | 条件 | `payType=vpa` 必传，收款方收款地址。**Yape 传收款方手机号** |
 | `bankAccount` | String | 条件 | `payType=bank` 必传，收款银行账号 |
-| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape / Yape OTP 传 3.6 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
+| `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape / Yape OTP 传 3.5 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
 | `payeeName` | String | 条件 | 收款人全名。**Yape / Yape OTP 银行代付必传**；其他钱包可忽略 |
 | `amount` | String | 是 | 金额，必须大于 0；Yape / Yape OTP 会四舍五入到两位小数 |
-| `sourceOrigin` | String | 否 | 资金来源说明，PCC 要求时与 sourceDestination 一起补传（目前 Yape 使用） |
-| `sourceDestination` | String | 否 | 资金去向说明，PCC 要求时与 sourceOrigin 一起补传（目前 Yape 使用） |
 
 **响应**：`SaasPayRespDto`
 
@@ -746,12 +792,13 @@ POST /saasPay
 
 **注意**：
 
-- 账号必须已绑定当前用户，否则 `account not found`。
-- Yape / Yape OTP `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败（`validateAccount failed, target name is empty`）。
+- 账号必须已绑定当前用户，否则 `account not found`（`WALLET_ACCOUNT_NOT_FOUND`）。
+- Yape / Yape OTP `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败
+  （`validateAccount failed, target name is empty`，`WALLET_PARAM_INVALID`）。
 - **超时/网络异常的语义**：如果转账请求已经发出但没拿到结果，返回
-  `Payment is being processed by the bank.`。此时**不要直接重试**，应通过 2.5 查询账单或人工对账确认结果，
-  避免重复出款。转账未发出时的网络问题返回 `network error`。
-- 上游明确失败时返回 `third pay error` 或上游原始错误信息。
+  `Payment is being processed by the bank.`（`WALLET_PAYMENT_PROCESSING`）。此时**不要直接重试**，应通过 2.5 查询账单或人工对账确认结果，
+  避免重复出款。转账未发出时的网络问题返回 `network error`（`WALLET_NETWORK_ERROR`）。
+- 上游明确失败时返回 `third pay error` 或上游原始错误信息（`WALLET_UPSTREAM_ERROR`，除非原文能归到更具体的类别）。
 
 ---
 
@@ -880,4 +927,5 @@ POST /submitTrade
    `yapeotp` 属于 OTP 类，发码时要带 PIN（`password`）和人脸照片（`picBase64` 或先调 `/saasUploadPic`），详见 2.7。
 4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`；头像需要单独更新时调 `/saasUploadPic`。
 5. 代付遇到 `Payment is being processed by the bank.` 不要重试，先查账单或人工确认。
-6. 判断结果只看 `code`（`1` 为成功），HTTP 状态码不代表业务结果。
+6. 判断结果只看 `code`（`1` 为成功），HTTP 状态码不代表业务结果；失败后按 `bizCode` 判断分支与展示文案，
+   不要匹配 `message` 文案（见 1.6.1）。
