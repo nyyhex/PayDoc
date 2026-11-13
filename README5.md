@@ -20,8 +20,8 @@
 
 | 字段 | 说明 |
 | --- | --- |
-| `apiKey` | 24 字节随机数做 base64url（无 padding）后的字符串，放在请求头 `X-API-KEY` |
-| `apiSecret` | 48 字节随机数做 base64url（无 padding）后的字符串，**只用于本地计算签名，绝不随请求发送** |
+| `apiKey` | 24 字节随机数做 base64url（无 padding），**定长 32 个字符**，放在请求头 `X-API-KEY` |
+| `apiSecret` | 48 字节随机数做 base64url（无 padding），**定长 64 个字符**，**只用于本地计算签名，绝不随请求发送** |
 | `whiteIp` | IP 白名单，多个用英文逗号分隔；为空表示不限制 |
 | `depositCallbackUrl` | 代收回调地址 |
 | `payoutCallbackUrl` | 代付回调地址 |
@@ -58,14 +58,17 @@
 
 示例：请求体与密钥
 
+> 下面以及 1.4 里的 `apiKey` / `apiSecret` / `X-SIGN` **全部是演示用的虚构值**，不对应任何真实商户，切勿照抄。
+
 ```json
 { "phone": "987654321", "typeCode": "yape" }
 ```
 
 ```
-apiSecret = 5f2b9c7d1e4a8b3f6c0d9e2a7b5c4d8e
-待签名串   = phone=987654321&typeCode=yape5f2b9c7d1e4a8b3f6c0d9e2a7b5c4d8e
-X-SIGN     = F5010DCA05AB917D6348196B4EBF3465
+apiKey     = K3vp1M-rOpDOWbUItr34kABAgZjq-gdw
+apiSecret  = EVgWxbPl81Bmeq0GBrU68lPPYz77336RimIMFVI67h9UdT0qYDkjlUy7poauQdq0
+待签名串   = phone=987654321&typeCode=yapeEVgWxbPl81Bmeq0GBrU68lPPYz77336RimIMFVI67h9UdT0qYDkjlUy7poauQdq0
+X-SIGN     = 4F598557C1F8A9B1CE71AC825CFFF02B
 ```
 
 Python：
@@ -104,8 +107,8 @@ String sign = SignGenerator.generateSign(JSON.parseObject(body), apiSecret);
 ```bash
 curl -X POST 'https://<host>/api/open/saasGetBal' \
   -H 'Content-Type: application/json' \
-  -H 'X-API-KEY: 3TqWc0h2yJ8mN5vB1xL9fK7p' \
-  -H 'X-SIGN: F5010DCA05AB917D6348196B4EBF3465' \
+  -H 'X-API-KEY: K3vp1M-rOpDOWbUItr34kABAgZjq-gdw' \
+  -H 'X-SIGN: 4F598557C1F8A9B1CE71AC825CFFF02B' \
   -d '{"phone":"987654321","typeCode":"yape"}'
 ```
 
@@ -692,9 +695,9 @@ POST /saasUploadPic
 **注意**：
 
 - `picUrl` 与 `picBase64` 都传时以 `picUrl` 为准；两个都不传返回 `picUrl or picBase64 is required`。
-- 规则：最大 5 MB，`picUrl` 下载超时 10 秒，统一转成 JPEG 存到 `resBak/yapepic/{手机号}.jpg`（透明区域铺白底），图片无法解码返回 `pic is not a valid image`。
+- 规则：最大 5 MB，`picUrl` 下载超时 10 秒，统一转成 JPEG 保存（透明区域铺白底），图片无法解码返回 `pic is not a valid image`。
 - 不校验账号是否存在、是否绑定其他用户：只要 `phone`/`typeCode` 合法就落盘，可提前为未导入的账号准备头像。
-- `yape` 与 `yapeotp` 共用同一张照片（按手机号存 `resBak/yapepic/{手机号}.jpg`）。
+- `yape` 与 `yapeotp` 共用同一张照片（都按手机号存储，互不区分类型）。
 - 覆盖是「临时文件 + 原子替换」，不会因为编码失败留下半张旧图。
 
 ---
