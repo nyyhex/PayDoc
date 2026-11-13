@@ -198,7 +198,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `WALLET_LOGIN_FAILED` | 账号或密码错误 | Invalid phone number or password. |
 | `WALLET_OTP_INVALID` | OTP 输错 | Incorrect OTP. Please check and try again. |
 | `WALLET_OTP_EXPIRED` | OTP 会话过期 | OTP has expired. Please resend the OTP. |
-| `WALLET_OTP_RATE_LIMITED` | 发送/校验 OTP 过于频繁，稍后重试 | Too many requests. Please try again later. |
+| `WALLET_OTP_RATE_LIMITED` | 发送/校验 OTP 或拉取账单过于频繁（上游 429），稍后重试 | Too many requests. Please try again later. |
 | `WALLET_SESSION_EXPIRED` | 上游登录会话失效，需重新登录/重绑 | Account session expired. Please log in again. |
 | `WALLET_NETWORK_ERROR` | 网络/连接/超时/上游 5xx，可重试 | Network error. Please try again. |
 | `WALLET_UPSTREAM_ERROR` | 上游失败但原因不明确，**兜底类** | The wallet provider failed to process the request. Please try again later. |
@@ -224,6 +224,8 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `account unauthorized` | 账号被禁用/封禁 | `WALLET_ACCOUNT_UNAUTHORIZED` |
 | `retry again` | 同类请求正在处理（分布式锁未释放），稍后重试 | `WALLET_UPSTREAM_ERROR` |
 | `third pay error` | 上游钱包返回失败，`message` 里可能带上游原文 | 按上游原文归类，认不出则 `WALLET_UPSTREAM_ERROR` |
+| `sync bill failed` | 拉账单失败（登录态失效、上游报错等），原因不明确 | `WALLET_UPSTREAM_ERROR` |
+| `sync bill failed. HTTP 429` | 拉账单被上游限流；限流冷却期内（数分钟）再次请求也是这条，稍后重试即可 | `WALLET_OTP_RATE_LIMITED` |
 
 ### 1.7 钱包类型 typeCode
 
