@@ -231,10 +231,10 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 
 | 分类 | typeCode |
 | --- | --- |
-| OTP 类（`otpType`） | `mobikwikotp_v2`、`mobikwikotp`、`phonepebusiness`、`paytmbusiness`、`amazonpay`、`airtel`、`freecharge`、`phonepeotp`、`bharotp`、`yapeotp` |
+| OTP 类（`otpType`） | `mobikwikotp_v2`、`mobikwikotp`、`phonepebusiness`、`paytmbusiness`、`paytmbusinessotp`、`amazonpay`、`airtel`、`freecharge`、`phonepeotp`、`bharotp`、`yapeotp`、`navi` |
 | 应用类（`appType`） | `mobikwik`、`phonepe`、`paytm`、`bhar`、`mobikwik_wallet_auto_buy`、`yape` |
 
-- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`
+- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`paytmbusinessotp`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`、`navi`
 - 支持代付（`buy`）：`paytm`、`phonepe`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`
 
 > `yape` 与 `yapeotp` 是同一钱包（Yape，秘鲁）的两种接入方式：`yape` 走 `saasBindApp` 绑定，
@@ -311,6 +311,7 @@ POST /saasOtpSend
 | `proxyUsername` | String | 否 | 代理用户名 |
 | `proxyPassword` | String | 否 | 代理密码 |
 | `sendWhatApps` | Boolean | 否 | 是否通过 WhatsApp 下发，默认 `false` |
+| `deliveryType` | String | 否 | **仅 `navi` 使用**：OTP 下发渠道，`TEXT`（默认，短信）/ `RCS`；其它取值返回参数错误 |
 
 **响应**：`SaasOtpSendRespDto`
 
@@ -448,6 +449,7 @@ POST /saasGetTrans
 | `typeCode` | String | 是 | 钱包类型 |
 | `page` | Integer | 否 | 页码，从 1 开始，默认 `1` |
 | `pageSize` | Integer | 否 | 每页条数，默认 `20` |
+| `onceMaxPage` | Integer | 否 | 本次同步上游账单最多翻页数，默认 `6`；非正数按默认值处理 |
 
 **响应**：`PageResult<HistoryTradeVo>`，`data` 内每条记录字段如下：
 
