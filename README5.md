@@ -193,6 +193,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `WALLET_PROXY_UNAVAILABLE` | 拿不到动态代理，请求没发出去，可直接重试 | Proxy is unavailable. Unable to submit. |
 | `WALLET_ACCOUNT_NOT_FOUND` | 账号不存在，或未在钱包侧注册 | Account not found or not registered. |
 | `WALLET_ACCOUNT_UNAUTHORIZED` | 账号不可用（unauthorized） | Account is not available. Please contact the administrator. |
+| `WALLET_NO_UPI_AVAILABLE` | 账号登录正常，但取不到任何可用收款地址（UPI/VPA），需换账号或先在钱包侧开通收款 | No collection address available for this account. Please contact the administrator. |
 | `WALLET_ACCOUNT_BLOCKED` | 账号被上游封禁/风控拦截/黑名单，**重试无用** | Account is blocked by the wallet provider. Please contact its support. |
 | `WALLET_ACCOUNT_BIND_CONFLICT` | 账号已绑定到其他用户/手机号 | This account is already bound to another user. |
 | `WALLET_LOGIN_FAILED` | 账号或密码错误 | Invalid phone number or password. |
@@ -222,6 +223,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `account not found` | 账号不存在，或未绑定到当前 API Key 所属用户 | `WALLET_ACCOUNT_NOT_FOUND` |
 | `account bind other user` | 账号已绑定到其他用户 | `WALLET_ACCOUNT_BIND_CONFLICT` |
 | `account unauthorized` | 账号被禁用/封禁 | `WALLET_ACCOUNT_UNAUTHORIZED` |
+| `no upi available` | 账号能登录但拿不到收款地址（收款的 VPA 与钱包主 VPA 都为空） | `WALLET_NO_UPI_AVAILABLE` |
 | `retry again` | 同类请求正在处理（分布式锁未释放），稍后重试 | `WALLET_UPSTREAM_ERROR` |
 | `third pay error` | 上游钱包返回失败，`message` 里可能带上游原文 | 按上游原文归类，认不出则 `WALLET_UPSTREAM_ERROR` |
 | `sync bill failed` | 拉账单失败（登录态失效、上游报错等），原因不明确 | `WALLET_UPSTREAM_ERROR` |
