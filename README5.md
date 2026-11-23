@@ -6,9 +6,9 @@
 > 响应格式: `{ "code": 1, "message": "success", "englishMessage": null, "bizCode": null, "data": ... }`
 
 本文档对应 `OpenApiController`（`/api/open/*`），供商户/渠道方以 API Key 方式接入：钱包列表、OTP 收发、
-收款地址查询、账单查询、钱包绑定/解绑、余额查询、代付、补单。
+收款地址查询、账单查询、钱包绑定/解绑、银行列表、余额查询、代付、补单。
 
-接口覆盖的钱包：Mobikwik / PhonePe / Paytm / BharatPe / Amazon Pay / Airtel / Freecharge 以及 Yape（秘鲁）。
+接口覆盖的钱包：Mobikwik / PhonePe / PhonePe Pay / Paytm / BharatPe / Amazon Pay / Airtel / Freecharge 以及 Yape（秘鲁）。
 
 ---
 
@@ -131,9 +131,9 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 ```json
 {
   "code": 400,
-  "message": "account not found",
+  "message": "account unauthorized",
   "englishMessage": null,
-  "bizCode": "WALLET_ACCOUNT_NOT_FOUND",
+  "bizCode": "WALLET_ACCOUNT_UNAUTHORIZED",
   "data": null
 }
 ```
@@ -141,7 +141,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | 字段 | 说明 |
 | --- | --- |
 | `code` | `1` 成功；非 1 为失败，见 1.6 |
-| `message` | 提示信息。业务失败时是具体原因（如 `account not found`），**保留原始/上游文案，可能逐次变化** |
+| `message` | 提示信息。业务失败时是具体原因（如 `account unauthorized`），**保留原始/上游文案，可能逐次变化** |
 | `englishMessage` | 预留字段，一般为 `null` |
 | `bizCode` | **统一错误码**，一类错误一个固定值，见 1.6；成功时为 `null`。判断分支请用它，不要用 `message` 文案 |
 | `data` | 业务数据；无返回值的接口为 `null` |
@@ -202,6 +202,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `WALLET_OTP_RATE_LIMITED` | 发送/校验 OTP 或拉取账单过于频繁（上游 429），稍后重试 | Too many requests. Please try again later. |
 | `WALLET_SESSION_EXPIRED` | 上游登录会话失效，需重新登录/重绑 | Account session expired. Please log in again. |
 | `WALLET_NETWORK_ERROR` | 网络/连接/超时/上游 5xx，可重试 | Network error. Please try again. |
+| `WALLET_ACCESS_FORBIDDEN` | 上游/代理拒绝访问（HTTP 403），换代理或稍后重试 | Access denied by the wallet provider. Please try again later. |
 | `WALLET_UPSTREAM_ERROR` | 上游失败但原因不明确，**兜底类** | The wallet provider failed to process the request. Please try again later. |
 | `WALLET_PAYMENT_PROCESSING` | 银行/钱包处理中，**不是失败**，勿重复提交 | Payment is being processed by the bank. |
 | `WALLET_NOT_SUPPORTED` | 当前钱包/账号不支持该操作 | This operation is not supported for this wallet. |
@@ -220,24 +221,30 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 | `yape phone must be 8 digits` | Yape 手机号为 8 位；带 `+51`/`51`/`00591`/`0051` 前缀也可，服务端会截取后 8 位 | `WALLET_PARAM_INVALID` |
 | `typeCode is invalid` | 钱包类型不存在 | `WALLET_PARAM_INVALID` |
 | `xxx not support otp` | 该钱包类型不支持 OTP 流程 | `WALLET_NOT_SUPPORTED` |
-| `account not found` | 账号不存在，或未绑定到当前 API Key 所属用户 | `WALLET_ACCOUNT_NOT_FOUND` |
+| `account not found`（上游原文）/ `account not registered` | 上游侧找不到账号 | `WALLET_ACCOUNT_NOT_FOUND` |
 | `account bind other user` | 账号已绑定到其他用户 | `WALLET_ACCOUNT_BIND_CONFLICT` |
-| `account unauthorized` | 账号被禁用/封禁 | `WALLET_ACCOUNT_UNAUTHORIZED` |
+| `This account is already bound on another platform. Please unbind it on that platform before re-binding` | `/saasBindApp`、`/saasAppBankList` 的绑定归属冲突 | `WALLET_ACCOUNT_BIND_CONFLICT` |
+| `account unauthorized` | 账号不存在、未绑定到当前用户，或被禁用/封禁（本地「账号查不到」统一用这条） | `WALLET_ACCOUNT_UNAUTHORIZED` |
 | `no upi available` | 账号能登录但拿不到收款地址（收款的 VPA 与钱包主 VPA 都为空） | `WALLET_NO_UPI_AVAILABLE` |
 | `retry again` | 同类请求正在处理（分布式锁未释放），稍后重试 | `WALLET_UPSTREAM_ERROR` |
 | `third pay error` | 上游钱包返回失败，`message` 里可能带上游原文 | 按上游原文归类，认不出则 `WALLET_UPSTREAM_ERROR` |
 | `sync bill failed` | 拉账单失败（登录态失效、上游报错等），原因不明确 | `WALLET_UPSTREAM_ERROR` |
 | `sync bill failed. HTTP 429` | 拉账单被上游限流；限流冷却期内（数分钟）再次请求也是这条，稍后重试即可 | `WALLET_OTP_RATE_LIMITED` |
+| `sync bill failed. HTTP 403` | 拉账单被上游/代理拒绝访问；换代理或稍后重试即可，不是账号本身的问题 | `WALLET_ACCESS_FORBIDDEN` |
 
 ### 1.7 钱包类型 typeCode
 
 | 分类 | typeCode |
 | --- | --- |
 | OTP 类（`otpType`） | `mobikwikotp_v2`、`mobikwikotp`、`phonepebusiness`、`paytmbusiness`、`paytmbusinessotp`、`amazonpay`、`airtel`、`freecharge`、`phonepeotp`、`bharotp`、`yapeotp`、`navi` |
-| 应用类（`appType`） | `mobikwik`、`phonepe`、`paytm`、`bhar`、`mobikwik_wallet_auto_buy`、`yape` |
+| 应用类（`appType`） | `mobikwik`、`phonepe`、`phonepepay`、`paytm`、`bhar`、`mobikwik_wallet_auto_buy`、`yape` |
 
-- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`paytmbusinessotp`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`、`navi`
-- 支持代付（`buy`）：`paytm`、`phonepe`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`
+- 支持代收（`sell`）：`bhar`、`paytm`、`phonepe`、`phonepepay`、`freecharge`、`mobikwik`、`mobikwikotp_v2`、`mobikwikotp`、`airtel`、`amazonpay`、`phonepebusiness`、`paytmbusiness`、`paytmbusinessotp`、`phonepeotp`、`bharotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`、`navi`
+- 支持代付（`buy`）：`paytm`、`phonepe`、`phonepepay`、`mobikwik`、`mobikwikotp`、`amazonpay`、`mobikwikotp_v2`、`freecharge`、`phonepeotp`、`mobikwik_wallet_auto_buy`、`yape`、`yapeotp`
+
+> `phonepe` 与 `phonepepay` 是同一套 PhonePe 应用接口的两种账号类型：`phonepepay` 走 PIN 校验绑定，
+> 支持余额查询与代付，需要先调 `3.6 查询银行列表` 拿到 `bankAccountId` / `vpa` 再绑定；
+> `phonepe` 不校验 PIN、不支持余额/代付。两者的账单同步共用同一套上游接口。
 
 > `yape` 与 `yapeotp` 是同一钱包（Yape，秘鲁）的两种接入方式：`yape` 走 `saasBindApp` 绑定，
 > `yapeotp` 走 `saasOtpSend` + `saasOtpVerity`（设备绑定 + 人脸 + 短信验证码），
@@ -427,7 +434,7 @@ POST /saasVpa
 
 **注意**：
 
-- 账号必须已绑定到当前 API Key 所属用户，否则返回 `account not found`。
+- 账号必须已绑定到当前 API Key 所属用户，否则返回 `account unauthorized`。
 - 结果缓存 10 秒；同一账号并发请求会串行执行。
 - `bhar` / `bharotp` 会返回该账号在 BharatPe 上的全部收款 UPI（`ui/v1/profile` 的 `qr_layer.vpas`），
   所以一个账号可能出现多条 `pa`；上游标记为失效的状态会被跳过，一个都取不到时退回收款二维码。
@@ -530,6 +537,7 @@ POST /saasGetTrans
 **注意**：
 
 - 查询前会先增量同步一次该账号的最新账单（受账号创建时间、最近 30 天、`startTime` 三者较晚者限制），再查本地库，所以首次调用可能稍慢。
+- `phonepe` 与 `phonepepay` 共用同一套 PhonePe 账单接口，两种类型的账号都能查。
 - **Yape 服务端只保留最近 3 个月流水**，同步也只回溯 3 个自然月，更早的数据查不到。
 - `type` 只返回收支两类；`SUCCESS` 但没有 `utr` 的记录会显示为 `PENDING`；`utr` 为 `no utr` / `history utr` 时统一返回空串。
 - 同一账号的同步有分布式锁，并发调用会等待，最长 60 秒。
@@ -635,7 +643,12 @@ POST /saasBindApp
 | 字段 | 类型 | 必传 | 说明 |
 | --- | --- | --- | --- |
 | `phone` | String | 是 | 账号手机号。Yape 为 8 位，可带 `+51`/`51`/`00591`/`0051` |
-| `typeCode` | String | 是 | 钱包类型；`mobikwik_wallet_auto_buy` 找不到账号时会回退到 `mobikwik` |
+| `typeCode` | String | 是 | 钱包类型；`mobikwik_wallet_auto_buy` 与 `mobikwik`、`phonepe` 与 `phonepepay` 互为兼容类型，找不到本类型账号时会按兼容类型查 |
+| `pin` | String | 条件 | **`phonepepay` 必传**：UPI PIN |
+| `bankAccountId` | String | 条件 | **`phonepepay` 必传**：`3.6 查询银行列表` 返回的 `accountId` |
+| `vpa` | String | 条件 | **`phonepepay` 必传**：该 bankAccountId 下的收款 VPA |
+| `bankName` | String | 否 | **`phonepepay`**：银行名称，可原样回传银行列表里的值 |
+| `bankAccountNo` | String | 否 | **`phonepepay`**：银行账号，可原样回传银行列表里的值 |
 | `proxyIp` | String | 否 | 指定出口代理，绑定成功后会落库 |
 | `proxyPort` | Integer | 否 | 代理端口 |
 | `proxyUsername` | String | 否 | 代理用户名 |
@@ -652,10 +665,29 @@ POST /saasBindApp
 }
 ```
 
+```json
+{
+  "phone": "9876543210",
+  "typeCode": "phonepepay",
+  "pin": "123456",
+  "bankAccountId": "acc_0001",
+  "vpa": "9876543210@ybl",
+  "bankName": "State Bank of India",
+  "bankAccountNo": "XXXXXXX8020"
+}
+```
+
 **注意**：
 
-- 账号必须已存在（先由运营/后台导入），否则返回 `account not found`（`WALLET_ACCOUNT_NOT_FOUND`）。
-- 账号已绑定其他用户时返回 `account bind other user`（`WALLET_ACCOUNT_BIND_CONFLICT`）。
+- 账号必须已存在（先由运营/后台导入），否则返回 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
+- 账号已绑定其他用户时返回 `This account is already bound on another platform. Please unbind it on that platform before re-binding`
+  （`WALLET_ACCOUNT_BIND_CONFLICT`）。
+- `phonepepay` 必传 `pin` / `bankAccountId` / `vpa`，三者缺一返回参数错误；绑定时会用 PIN 查一次余额做校验，
+  失败返回 `pin is error` 或 `bind error, please try again`。
+- 绑定成功后账号类型会落到「本次使用的实现」对应的类型：以 `mobikwik_wallet_auto_buy` 身份绑定老 `mobikwik` 账号会迁移成
+  `mobikwik_wallet_auto_buy`，以 `phonepepay` 身份绑定老 `phonepe` 账号会迁移成 `phonepepay`。
+  请尽量使用与账号一致的 `typeCode`；反方向（如 `phonepe` 调本接口去绑 `phonepepay` 账号）会把账号类型改回 `phonepe`，
+  该账号之后不再支持余额查询与代付。
 - 本接口不处理头像；需要更新 Yape 头像请调 `3.2 上传头像`。
 - 绑定时会用解析到的代理重新登录一次，既能校验账号数据，也能确认代理可用；登录失败返回 `login failed`
   （`WALLET_LOGIN_FAILED`）。
@@ -745,7 +777,8 @@ POST /saasGetBal
 
 **注意**：
 
-- 账号必须已绑定当前用户，否则 `account not found`。
+- 账号必须已绑定当前用户，否则 `account unauthorized`。
+- `phonepepay` 支持本接口（余额按 `checkBalance` 缓存 10 分钟）；`phonepe` 不支持，返回 `not support`。
 - Yape / Yape OTP 余额缓存 10 分钟，缓存命中时 `lastUpdateTimestamp` 是缓存写入时间，不是本次查询时间。
 - 上游返回余额异常时返回 `GET Balance ERROR`。
 
@@ -801,7 +834,8 @@ POST /saasPay
 
 **注意**：
 
-- 账号必须已绑定当前用户，否则 `account not found`（`WALLET_ACCOUNT_NOT_FOUND`）。
+- 账号必须已绑定当前用户，否则 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
+- `phonepepay` 支持本接口，`payType` 传 `vpa` 或 `bank`；`phonepe` 不支持，返回 `not support`。
 - Yape / Yape OTP `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败
   （`validateAccount failed, target name is empty`，`WALLET_PARAM_INVALID`）。
 - **超时/网络异常的语义**：如果转账请求已经发出但没拿到结果，返回
@@ -888,6 +922,67 @@ POST /saasPay
 
 ---
 
+### 3.6 查询银行列表
+
+```
+POST /saasAppBankList
+```
+
+供 `phonepepay` 绑定前选择收款账户：返回该账号在 PhonePe 下的全部银行卡与对应 VPA。
+其它类型（含 `phonepe`）直接返回空数组。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 目前只有 `phonepepay` 有数据；其它类型（含 `phonepe`）直接返回空数组 |
+| `proxyIp` | String | 否 | 指定出口代理 |
+| `proxyPort` | Integer | 否 | 代理端口 |
+| `proxyUsername` | String | 否 | 代理用户名 |
+| `proxyPassword` | String | 否 | 代理密码 |
+
+**响应**：`SaasAppBankListRespDto` 数组
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `accountId` | String | 银行账户 ID，绑定 `phonepepay` 时作为 `bankAccountId` 传回 |
+| `bankName` | String | 银行名称 |
+| `accountNo` | String | 银行账号（通常是掩码） |
+| `vpas` | Array\<String\> | 该账户下的收款 VPA，绑定时任选其一作为 `vpa` 传回 |
+
+**示例**：
+
+```json
+{ "phone": "9876543210", "typeCode": "phonepepay" }
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": [
+    {
+      "accountId": "acc_0001",
+      "bankName": "State Bank of India",
+      "accountNo": "XXXXXXX8020",
+      "vpas": ["9876543210@ybl", "9876543210@axl"]
+    }
+  ]
+}
+```
+
+**注意**：
+
+- 账号必须已存在，否则 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
+- 账号已绑定其他用户时返回 `This account is already bound on another platform. Please unbind it on that platform before re-binding`
+  （`WALLET_ACCOUNT_BIND_CONFLICT`）。
+- 只返回 `active` 的银行卡；结果缓存 10 分钟，同一账号并发请求会串行执行。
+- 上游 3 次都拿不到资料时返回 `GET Bank List ERROR`。
+
+---
+
 ## 4. 订单
 
 ### 4.1 补单
@@ -933,6 +1028,7 @@ POST /submitTrade
 1. 请求统一 `POST`，`Content-Type: application/json`，请求体必须是合法 JSON 对象（无参数也传 `{}`）。
 2. 每次请求都带上 `X-API-KEY` 和按 1.3 计算的 `X-SIGN`；签名只覆盖请求体，值建议全部用字符串。
 3. 先调 `/saasBankList` 拿到 `typeCode` 与 `type`，OTP 类走 `/saasOtpSend` + `/saasOtpVerity`，应用类走 `/saasBindApp`。
+   `phonepepay` 绑定前先调 `/saasAppBankList` 选银行账户，再带上 `pin` / `bankAccountId` / `vpa` 调 `/saasBindApp`；
    `yapeotp` 属于 OTP 类，发码时要带 PIN（`password`）和人脸照片（`picBase64` 或先调 `/saasUploadPic`），详见 2.7。
 4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`；头像需要单独更新时调 `/saasUploadPic`。
 5. 代付遇到 `Payment is being processed by the bank.` 不要重试，先查账单或人工确认。
