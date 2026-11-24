@@ -250,6 +250,7 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 > 绑定时由服务端注入 easypaisa 网关。币种为 `PKR`；收款地址是 Raast 别名，账号未注册别名时退回手机号；
 > 代付 `payType=vpa` 传 Raast 别名或收款手机号，`payType=bank` 传银行账号 + 银行代码
 > （银行列表 `/saasAppBankList` 返回的 `accountId`，即上游 `stateBankBicCode`，放在 `ifsc` 字段）。
+> 另支持 `3.7 查询账号类型`（personal / business / unknown）与 `3.8 查询账户限额`（支出/收入的日/月/年额度）。
 
 > `yape` 与 `yapeotp` 是同一钱包（Yape，秘鲁）的两种接入方式：`yape` 走 `saasBindApp` 绑定，
 > `yapeotp` 走 `saasOtpSend` + `saasOtpVerity`（设备绑定 + 人脸 + 短信验证码），
@@ -999,6 +1000,126 @@ POST /saasAppBankList
 
 ---
 
+### 3.7 查询账号类型
+
+```
+POST /saasGetAccountType
+```
+
+目前只有 `easypaisa` 支持；其它类型返回 `not support`。
+
+账号类型由网关从登录响应里的 `accountProfile` / `idType` 自动判定并缓存，本接口**不额外打上游**，
+返回的是网关缓存的结论（同一账号只会变化于重新登录后）。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 钱包类型，目前仅 `easypaisa` |
+
+**响应**：`SaasAccountTypeRespDto`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `accountType` | String | `personal` / `business` / `unknown` |
+| `accountProfile` | String | 判定依据的原始字符串，如 `Subscriber Profile QR Merchant` |
+| `walletProfile` | String | 判定依据的原始字符串，如 `ADA QR Merchant` |
+
+**示例**：
+
+```json
+{ "phone": "03001234567", "typeCode": "easypaisa" }
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": {
+    "accountType": "business",
+    "accountProfile": "Subscriber Profile QR Merchant",
+    "walletProfile": "ADA QR Merchant"
+  }
+}
+```
+
+**注意**：
+
+- 账号必须已绑定当前用户且状态为启用，否则 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
+- 上游没给出判定依据时 `accountType` 返回 `unknown`，不会编造类型。
+
+---
+
+### 3.8 查询账户限额
+
+```
+POST /saasGetLimit
+```
+
+目前只有 `easypaisa` 支持；其它类型返回 `not support`。
+
+语义：`sending` = 支出额度，`receiving` = 收入额度；每档 `usedRemaining` 是**当期剩余可用**，
+`limit` 是该期**总额度**（金额单位 PKR）。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号 |
+| `typeCode` | String | 是 | 钱包类型，目前仅 `easypaisa` |
+
+**响应**：`SaasLimitRespDto`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `accountType` | String | 上游返回的账号类型，如 `business` |
+| `sending` | Object | 支出额度，含 `daily` / `monthly` / `yearly` 三档 |
+| `receiving` | Object | 收入额度，同上 |
+| `accountLevels` | Object | 分级限额原始结构，随账号等级变化，原样透出 |
+| `isEligibleForAda` | Boolean | 是否具备 ADA 资格 |
+
+`sending` / `receiving` 每档结构：`{ "usedRemaining": 2000000.0, "limit": 2000000.0 }`，缺档位时该档为 `null`。
+
+**示例**：
+
+```json
+{ "phone": "03001234567", "typeCode": "easypaisa" }
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": {
+    "accountType": "business",
+    "sending": {
+      "daily":   { "usedRemaining": 2000000.0, "limit": 2000000.0 },
+      "monthly": { "usedRemaining": 1990601.0, "limit": 2000000.0 },
+      "yearly":  { "usedRemaining": 23264134.0, "limit": 24000000.0 }
+    },
+    "receiving": {
+      "daily":   { "usedRemaining": 3000000.0, "limit": 3000000.0 },
+      "monthly": { "usedRemaining": 2975450.0, "limit": 3000000.0 },
+      "yearly":  { "usedRemaining": 35002340.0, "limit": 36000000.0 }
+    },
+    "accountLevels": { "L0": { "daily": "15000,25000", "monthly": "30000,50000" } },
+    "isEligibleForAda": false
+  }
+}
+```
+
+**注意**：
+
+- 账号必须已绑定当前用户且状态为启用，否则 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
+- 限额依赖账号凭据里的 `kyc_data`；缺失时返回
+  `account credentials missing kyc_data, please re-upload the account`（`WALLET_PARAM_INVALID`）。
+- 上游其它失败按 `bizCode` 归类，原始原因看 `message`。
+
+---
+
 ## 4. 订单
 
 ### 4.1 补单
@@ -1047,6 +1168,7 @@ POST /submitTrade
    `phonepepay` 绑定前先调 `/saasAppBankList` 选银行账户，再带上 `pin` / `bankAccountId` / `vpa` 调 `/saasBindApp`；
    `yapeotp` 属于 OTP 类，发码时要带 PIN（`password`）和人脸照片（`picBase64` 或先调 `/saasUploadPic`），详见 2.7。
 4. 绑定成功后再调 `/saasVpa`、`/saasGetBal`、`/saasPay`、`/saasGetTrans`；头像需要单独更新时调 `/saasUploadPic`。
+   `easypaisa` 还可按需调 `/saasGetAccountType` 看号类型、`/saasGetLimit` 看剩余额度。
 5. 代付遇到 `Payment is being processed by the bank.` 不要重试，先查账单或人工确认。
 6. 判断结果只看 `code`（`1` 为成功），HTTP 状态码不代表业务结果；失败后按 `bizCode` 判断分支与展示文案，
    不要匹配 `message` 文案（见 1.6.1）。
