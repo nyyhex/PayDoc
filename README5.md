@@ -247,10 +247,30 @@ curl -X POST 'https://<host>/api/open/saasGetBal' \
 > `phonepe` 不校验 PIN、不支持余额/代付。两者的账单同步共用同一套上游接口。
 
 > `easypaisa`（Easypaisa，巴基斯坦）是 App 类钱包：登录凭据由改包 App 上报、保存在账号的 `appToken`（JSON），
-> 绑定时由服务端注入 easypaisa 网关。币种为 `PKR`；收款地址是 Raast 别名，账号未注册别名时退回手机号；
+> 绑定时由服务端注入 easypaisa 网关。币种为 `PKR`；收款地址优先取上报凭据里的 `iban`（Raast 入账账号），
+> 没有时才查 Raast 别名，再没有退回手机号；
 > 代付 `payType=vpa` 传 Raast 别名或收款手机号，`payType=bank` 传银行账号 + 银行代码
 > （银行列表 `/saasAppBankList` 返回的 `accountId`，即上游 `stateBankBicCode`，放在 `ifsc` 字段）。
+> `payType=vpa` 时上游要求手机号走对通道：**easypaisa 本行钱包号码走 `Easypaisa`，JazzCash / 跨钱包号码走
+> `Mobile Number`**，通道用错会得到 `PWM80422 couldn't find account number`。服务端按号段自动判断
+> （Telenor 0340–0349 走 `Easypaisa`，其余走 `Mobile Number`），也可用 `aliasType` 显式指定；
+> 通道不匹配时自动换另一个手机号通道重试一次（询价阶段失败，不会重复扣款）。
 > 另支持 `3.7 查询账号类型`（personal / business / unknown）与 `3.8 查询账户限额`（支出/收入的日/月/年额度）。
+>
+> **凭据要求**：上报的凭据里**强烈建议带 `login_body`（上次成功登录的原始请求体）+ `login_signature`**。
+> token 过期时网关会原样重放这次登录自动续期，不需要 PIN；缺这两个字段才会退回 PIN 自算签名，
+> 后者对 `osVersion` / `macInfo` 极敏感，容易失败。
+>
+> **401 自动处理**：任一查询/代付接口遇到 401 时，服务端会先重推凭据并主动调网关重登，
+> 重登成功则自动重试一次；重登失败或重试仍 401，账号会被置为 `ban` 并返回
+> `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`），此时需要人工重新上传凭据
+> （常见原因 `relogin_error=URM90040`：需先在 App 里过指纹 BVS）。
+>
+> **出口问题自动换代理**：重登返回 `upstream_transport_error` / `upstream_timeout` /
+> `upstream_unavailable` / `upstream_http_error`（出站请求没拿到上游 HTTP 响应，多为当前
+> 代理出口连不上 `api.easypaisa.telenorbank.pk`）时，服务端会自动换一个 **PK 区代理**、
+> 落库后重试重登，最多 3 次；换代理后仍不通才置 `ban`。
+> `relogin_failed`（上游明确拒绝，如需过指纹 BVS）不换代理，直接按失败处理。
 
 > `yape` 与 `yapeotp` 是同一钱包（Yape，秘鲁）的两种接入方式：`yape` 走 `saasBindApp` 绑定，
 > `yapeotp` 走 `saasOtpSend` + `saasOtpVerity`（设备绑定 + 人脸 + 短信验证码），
@@ -763,6 +783,7 @@ POST /saasGetBal
 | --- | --- | --- | --- |
 | `phone` | String | 是 | 账号手机号 |
 | `typeCode` | String | 是 | 钱包类型 |
+| `wallet` | Boolean | 否 | **仅 `mobikwik`**：`true` 查钱包（Pocket UPI）余额，默认 `false` 查银行卡余额 |
 
 **响应**：`SaasGetBalanceRespDto`
 
@@ -790,7 +811,8 @@ POST /saasGetBal
 
 - 账号必须已绑定当前用户，否则 `account unauthorized`。
 - `phonepepay` 支持本接口（余额按 `checkBalance` 缓存 10 分钟）；`phonepe` 不支持，返回 `not support`。
-- `mobikwik` 仅在绑定带 `pin` + `bankAccountId` 的「可支付」状态下支持，否则返回 `not support`。
+- `mobikwik` 查银行卡余额要求绑定带 `pin` + `bankAccountId`，否则返回 `not support`；
+  传 `wallet=true` 改查钱包余额，**不要求绑定 PIN/银行卡**，与银行卡余额分开缓存（1 分钟）。
 - `easypaisa` 支持本接口，余额按账号缓存 1 分钟，币种 `PKR`。
 - Yape / Yape OTP 余额缓存 10 分钟，缓存命中时 `lastUpdateTimestamp` 是缓存写入时间，不是本次查询时间。
 - 上游返回余额异常时返回 `GET Balance ERROR`。
@@ -815,6 +837,8 @@ POST /saasPay
 | `ifsc` | String | 条件 | `payType=bank` 必传，银行代码。Yape / Yape OTP 传 3.5 里的 `bank_code`，如 `1005`（BANCO DE CREDITO / BCP）；服务端会按代码自动补上银行名称与缩写，未知代码返回 `unknown code_bank xxx, see bankName(code)` |
 | `payeeName` | String | 条件 | 收款人全名。**Yape / Yape OTP 银行代付必传**；其他钱包可忽略 |
 | `amount` | String | 是 | 金额，必须大于 0；Yape / Yape OTP 会四舍五入到两位小数 |
+| `wallet` | Boolean | 否 | **仅 `mobikwik`**：`true` 用钱包（Pocket UPI）余额出款，默认 `false` 走银行卡通道；钱包支付只支持整数卢比 |
+| `aliasType` | String | 否 | **仅 `easypaisa`**：收款方通道，`Easypaisa`（本行钱包）或 `Mobile Number`（JazzCash / 跨钱包手机号），也接受 `MSISDN` / `JazzCash` / `easypaisa wallet` 等写法。不传时按号段自动判断（见 3.4 注意） |
 
 **响应**：`SaasPayRespDto`
 
@@ -849,10 +873,20 @@ POST /saasPay
 
 - 账号必须已绑定当前用户，否则 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
 - `phonepepay` 支持本接口，`payType` 传 `vpa` 或 `bank`；`phonepe` 不支持，返回 `not support`。
-- `mobikwik` 仅在「可支付」状态下支持（绑定带 `pin` + `bankAccountId`），否则返回 `not support`；
-  `payType=bank` 时 `bankAccount` + `ifsc` 会拼成 `bankAccount@ifsc.ifsc.npci` 作为收款 VPA。
+- `mobikwik` 银行卡通道要求「可支付」绑定额（带 `pin` + `bankAccountId`）；
+  `payType=bank` 时 `bankAccount` + `ifsc` 会拼成 `bankAccount@ifsc.ifsc.npci` 作为收款 VPA；
+  **`wallet=true` 走 Pocket UPI 钱包余额支付，不需要 PIN**，金额必须是整数卢比，
+  非整数返回参数错误 `Pocket UPI requires whole rupees`。
 - `easypaisa` 支持本接口：`payType=vpa` 的 `vpa` 传收款方 Raast 别名或收款手机号；
   `payType=bank` 的 `ifsc` 传银行代码（`/saasAppBankList` 返回的 `accountId`）。金额单位 `PKR`。
+  `payType=vpa` 的通道（`alias_type`）选择：
+  - 不传 `aliasType` 时按号码特征自动判断：Telenor 号段（`0340`–`0349`，如 `03451234567` / `+923451234567`）
+    走 `Easypaisa` 本行钱包；其它运营商号段及跨钱包走 `Mobile Number`（JazzCash）；非手机号（Raast 别名）走 `Mobile Number`。
+  - 可传 `aliasType` 显式指定，取值同上（大小写不敏感，`MSISDN` / `mobile` / `JazzCash` 等价于 `Mobile Number`，
+    `easypaisa wallet` 等价于 `Easypaisa`；其它取值原样透传给上游）。
+  - 上游返回 `PWM80422 couldn't find account number` / `ESB99999`（通道与号码不匹配）时，服务端自动换另一个
+    手机号通道重试一次。这类失败发生在询价阶段，未扣款，可安全重试；其它失败不会重试，避免重复出款。
+  - `payType=bank` 固定走 `Account Number`，`ifsc` 即 `bank_code`。
 - Yape / Yape OTP `payType=vpa` 时会先用收款手机号查询收款人全名，查不到则失败
   （`validateAccount failed, target name is empty`，`WALLET_PARAM_INVALID`）。
 - **超时/网络异常的语义**：如果转账请求已经发出但没拿到结果，返回
