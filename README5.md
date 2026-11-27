@@ -1194,6 +1194,69 @@ POST /submitTrade
 
 ---
 
+### 4.2 查询账单原始报文
+
+```
+POST /saasGetRawTrade
+```
+
+返回某笔已入库账单的上游原始报文（`HistoryTrade.rawData`，原样返回、不做裁剪），
+用于对账异常时回查「上游当初到底回了什么」。**只读本地库，不会触发账单同步**。
+
+**请求参数**：
+
+| 字段 | 类型 | 必传 | 说明 |
+| --- | --- | --- | --- |
+| `phone` | String | 是 | 账号手机号。Yape 支持 `+51` 等前缀，服务端归一化 |
+| `typeCode` | String | 是 | 钱包类型 |
+| `txnId` | String | 条件 | 交易号。与 `utr` 二选一，**同时传时以 `txnId` 为准** |
+| `utr` | String | 条件 | 银行流水号。同一账号下 utr 不保证唯一，命中多条时返回交易时间最新的一条 |
+
+**响应**：`SaasRawTradeRespDto`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `txnId` | String | 交易号 |
+| `utr` | String | 银行流水号，没有时为空串 |
+| `type` | String | `SENT_PAYMENT`（支出）/ `RECEIVED_PAYMENT`（收入） |
+| `status` | String | 账单状态，如 `SUCCESS` |
+| `amount` | String | 金额，两位小数字符串 |
+| `currency` | String | 币种，如 `PKR` |
+| `rawData` | String | 上游原始报文（各钱包格式不同，原样返回） |
+
+**示例**：
+
+```json
+{ "phone": "03001234567", "typeCode": "easypaisa", "utr": "59139295761" }
+```
+
+```json
+{
+  "code": 1,
+  "message": "success",
+  "englishMessage": null,
+  "data": {
+    "txnId": "BIL1575054825091072000",
+    "utr": "59139295761",
+    "type": "RECEIVED_PAYMENT",
+    "status": "SUCCESS",
+    "amount": "30.00",
+    "currency": "PKR",
+    "rawData": "{\"orderNo\":\"BIL1575054825091072000\",\"amount\":30.0,...}"
+  }
+}
+```
+
+**注意**：
+
+- 只能查当前 API Key 所属用户名下的账号，否则返回 `account unauthorized`（`WALLET_ACCOUNT_UNAUTHORIZED`）。
+- **不校验账号状态**：账号被封禁时仍可查询，便于排查问题。
+- `txnId` 与 `utr` 都没传返回 `txnId or utr is required`（`WALLET_PARAM_INVALID`）。
+- 查不到账单返回 `trade not found`（`WALLET_PARAM_INVALID`），常见原因是账单还没同步或 txnId/utr 传错。
+- `rawData` 是上游原文，大小不受 Open API 响应限制以外的约束；建议只在排查时按需调用。
+
+---
+
 ## 5. 接入检查清单
 
 1. 请求统一 `POST`，`Content-Type: application/json`，请求体必须是合法 JSON 对象（无参数也传 `{}`）。
